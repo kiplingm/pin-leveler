@@ -50,6 +50,16 @@ a{color:var(--acc)}
 <div id="app"></div>
 <script>
 "use strict";
+/* ---------- version ---------- */
+// Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
+// The update checker regex-matches the first VERSION declaration below, so keep that exact form
+// and do not write that declaration anywhere earlier in the file (comments included).
+const VERSION="1.5.0";
+const BUILD_DATE="2026-11-06";
+const CHANGELOG=[
+ ["1.5.0","2026-11-06","Version number in header and footer, What's new list, Check for updates, and an Updated card after an upgrade."],
+ ["1.4.0","2026-11-06","Guided spot check: auto-captures when the phone is still, signals with a tone and vibration, then waits for you to move to the next spot (top, middle, bottom). Settle strictness option and per-spot Redo."]
+];
 /* ---------- storage ---------- */
 const LS=k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}};
 const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
@@ -105,11 +115,12 @@ const PRESETS=[
    verify:["Play a few balls. If it plays too slow or too fast, change the target by 0.5° and rerun."]}}
 ];
 // add any new built-in machine profiles to existing saved lists
+const hadSaved=!!LS("pl.profiles");
 let P=LS("pl.profiles")||PRESETS.map((p,i)=>({id:p.key?"k_"+p.key:"p"+i,...p}));
 PRESETS.forEach(p=>{ if(p.key && !P.some(x=>x.key===p.key)) P.push({id:"k_"+p.key,...p}); });
 let cur=LS("pl.cur")||P[0].id;
 let off=LS("pl.off")||{p:0,r:0};
-let opts=LS("pl.opts")||{flip:false,beep:true,speak:false};
+let opts=Object.assign({flip:false,beep:true,speak:false,strict:"normal"},LS("pl.opts")||{});
 let hist=LS("pl.hist")||{};
 const tipsHtml=(ph,title)=>{const t=(prof().tips||{})[ph];return t&&t.length?`<div class="card" style="border-color:var(--acc)"><h2>${title||"Machine notes"}</h2><ul class="mut">${t.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""};
 const prof=()=>P.find(x=>x.id===cur)||P[0];
@@ -117,10 +128,11 @@ const persist=()=>{save("pl.profiles",P);save("pl.cur",cur);save("pl.off",off);s
 
 /* ---------- sensors ---------- */
 const D=Math.PI/180;
-let raw={p:0,r:0,has:false}, sm={p:0,r:0,init:false}, sim=null;
+let raw={p:0,r:0,has:false}, sm={p:0,r:0,init:false}, sim=null, rawLast={p:0,r:0};
 function onOri(e){
   if(e.beta==null||e.gamma==null)return;
   const wasSim=sim&&sim.auto; raw.has=true;
+  rawLast.p=e.beta; rawLast.r=e.gamma; // unsmoothed, used by settle / spot-check logic
   if(wasSim){sim=null;sm.init=false;setTimeout(render,0)}
   // beta: top edge raised => positive (back higher when phone top points to back). gamma: right edge down => positive.
   if(!sm.init){sm.p=e.beta;sm.r=e.gamma;sm.init=true}
@@ -144,6 +156,11 @@ function live(){
   if(sim) return {p:sim.p*dir(),r:sim.r*dir()};
   return {p:(sm.p-off.p)*dir(),r:(sm.r-off.r)*dir()};
 }
+// calibrated but NOT smoothed
+function liveRaw(){
+  if(sim) return {p:sim.p*dir(),r:sim.r*dir()};
+  return {p:(rawLast.p-off.p)*dir(),r:(rawLast.r-off.r)*dir()};
+}
 
 /* ---------- audio ---------- */
 let AC=null;
@@ -157,6 +174,25 @@ function chime(n=1){
       o.frequency.value=880;g.gain.setValueAtTime(0.2,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.15);
       o.connect(g);g.connect(AC.destination);o.start(t);o.stop(t+0.16);
     }
+  }catch(e){}
+}
+
+function speak(t){
+  if(opts.speak&&t&&window.speechSynthesis){try{speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(t))}catch(e){}}
+}
+// tone(seq, say): play a sequence of notes (Hz), vibrate, and optionally speak.
+function tone(seq,say){
+  try{ if(navigator.vibrate) navigator.vibrate([60,40,60]); }catch(e){}
+  speak(say);
+  if(!opts.beep)return;
+  try{
+    AC=AC||new (window.AudioContext||window.webkitAudioContext)();
+    if(AC.state==="suspended")AC.resume();
+    seq.forEach((f,i)=>{
+      const o=AC.createOscillator(),g=AC.createGain(),t=AC.currentTime+i*0.16;
+      o.frequency.value=f;g.gain.setValueAtTime(0.2,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.14);
+      o.connect(g);g.connect(AC.destination);o.start(t);o.stop(t+0.15);
+    });
   }catch(e){}
 }
 
@@ -174,22 +210,59 @@ const cls=(err,tol)=>{const a=Math.abs(err);return a<=tol?"good":a<=tol*3?"near"
 /* ---------- state ---------- */
 let step=0, okSince=0, chimed=false, hold=0, saved=false, calA=null, calB=null, capturing=false;
 const STEPS=["Setup","Calibrate","Roll","Pitch","Verify","Spots"];
-const SPOTS=[["flip","Near the flippers"],["mid","Mid-playfield"],["top","Near the top"]];
+// guided order: top, middle, bottom
+const SPOTS=[["top","Near the top"],["mid","Mid-playfield"],["flip","Near the flippers"]];
+const SAY=["the top","the middle","the bottom"];
 let spots={};
+let showLog=false, updMsg="", showUpd=false, updFrom="";
 
 /* ---------- views ---------- */
 function render(){
   const p=prof();
-  let h=`<header><h1>🎯 Pin Leveler</h1><div class="dots">${STEPS.map((s,i)=>`<i class="${i===step?"on":i<step?"done":""}" title="${s}"></i>`).join("")}</div></header>`;
+  let h=`<header><h1>🎯 Pin Leveler <small class="mut">v${VERSION}</small></h1><div class="dots">${STEPS.map((s,i)=>`<i class="${i===step?"on":i<step?"done":""}" title="${s}"></i>`).join("")}</div></header>`;
   if(step>=1)h+=`<div class="mut" id="dbg" style="margin:-4px 0 8px;font-size:12px"></div>`;
   if(sim)h+=`<div class="card sim"><b class="near">⚠ SIMULATED readings: no motion data from this phone.</b> <span class="mut">Open the page over HTTPS in Chrome, allow motion sensors, and reload. These sliders are fake.</span>
    <label>Pitch <span id="sp">${sim.p.toFixed(2)}</span>°<input id="simP" type="range" min="3" max="10" step="0.05" value="${sim.p}"></label>
    <label>Roll <span id="sr">${sim.r.toFixed(2)}</span>°<input id="simR" type="range" min="-3" max="3" step="0.05" value="${sim.r}"></label></div>`;
-  if(step===0) h+=viewSetup(p);
+  if(step===0) h+=updatedCard()+viewSetup(p);
   if(step===1) h+=viewCal();
   if(step===2||step===3||step===4) h+=viewLive();
   if(step===5) h+=viewSpots();
+  h+=footerHtml();
   $("#app").innerHTML=h; bind(); update();
+}
+
+/* ---------- version UI ---------- */
+function updatedCard(){
+  if(!showUpd)return "";
+  const n=(CHANGELOG[0]||[])[2]||"";
+  return `<div class="card" style="border-color:var(--ok)"><div class="row"><div><b class="good">Updated to v${VERSION}</b>${updFrom&&updFrom!=="earlier"?` <span class="mut">(from v${esc(updFrom)})</span>`:""}<br><span class="mut">${esc(n)}</span></div>
+  <button id="updDismiss" style="flex:0 0 auto">Dismiss</button></div></div>`;
+}
+function footerHtml(){
+  return `<div class="mut" style="text-align:center;margin-top:16px;font-size:12px">Pin Leveler v${VERSION} · ${BUILD_DATE}<br>
+  <a href="#" id="logLink">What's new</a> · <a href="#" id="updLink">Check for updates</a></div>
+  ${showLog?`<div class="card" style="margin-top:8px"><h2>What's new</h2><ul class="mut">${CHANGELOG.map(([v,d,n])=>`<li><b>v${esc(v)}</b> (${esc(d)}): ${esc(n)}</li>`).join("")}</ul></div>`:""}
+  <div id="updMsg" class="mut" style="text-align:center;margin-top:6px">${updMsg}</div>`;
+}
+const cmpVer=(a,b)=>{const x=String(a).split(".").map(Number),y=String(b).split(".").map(Number);
+  for(let i=0;i<3;i++){const d=(x[i]||0)-(y[i]||0);if(d)return d>0?1:-1}return 0};
+function refreshUpd(){const e=$("#updMsg"); if(e){e.innerHTML=updMsg;bindUpd()}}
+function bindUpd(){const r=$("#reloadNow"); if(r)r.onclick=()=>location.replace(location.pathname+"?r="+Date.now())}
+async function checkUpdate(){
+  updMsg="Checking…"; refreshUpd();
+  try{
+    if(!/^https?:$/.test(location.protocol))throw new Error("open the page over http(s)");
+    const r=await fetch(location.origin+location.pathname+"?v="+Date.now(),{cache:"no-store"});
+    if(!r.ok)throw new Error("HTTP "+r.status);
+    const m=/const VERSION\s*=\s*"([^"]+)"/.exec(await r.text());
+    if(!m)throw new Error("version not found");
+    const c=cmpVer(m[1],VERSION);
+    updMsg=c>0?`Version ${esc(m[1])} is available. <button class="pri" id="reloadNow">Reload now</button>`
+      :c===0?`✅ You're on the latest version (v${VERSION}).`
+      :`This copy (v${VERSION}) is newer than the published version (v${esc(m[1])}).`;
+  }catch(e){updMsg=`Couldn't check for updates (${esc(e.message)}).`}
+  refreshUpd();
 }
 
 function viewSetup(p){
@@ -299,7 +372,11 @@ function update(){
     const c=$("#calStat"); if(c&&!capturing&&!calA)c.textContent=`Live: ${sm.p.toFixed(2)}°, ${sm.r.toFixed(2)}°`;
     return;
   }
-  if(step===5){const a=$("#pv"),b=$("#rv"); if(a){a.textContent=l.p.toFixed(2)+"°";a.className=cls(l.p-p.pitch,p.tolP);b.textContent=f2(l.r)+"°";b.className=cls(l.r,p.tolR)} return;}
+  if(step===5){const a=$("#pv"),b=$("#rv"); if(a){a.textContent=l.p.toFixed(2)+"°";a.className=cls(l.p-p.pitch,p.tolP);b.textContent=f2(l.r)+"°";b.className=cls(l.r,p.tolR)}
+    if(flow.on){const fm=$("#flowMsg"); if(fm){fm.innerHTML=flowText();
+      $("#flowBar").style.width=(flow.st==="settle"?Math.min(1,flowQuiet/QUIET_MS)*100:0)+"%";
+      $("#flowNow").disabled=flow.st!=="settle"; $("#flowMoved").disabled=flow.st!=="waitmove"}}
+    return;}
   if(step<2)return;
   const pv=$("#pv"),rv=$("#rv"); if(!pv)return;
   const eP=l.p-p.pitch;
@@ -332,8 +409,68 @@ function resultHtml(p){
 function sample(ms){return new Promise(res=>{const a=[];const iv=setInterval(()=>a.push({p:sim?sim.p:sm.p,r:sim?sim.r:sm.r}),50);
   setTimeout(()=>{clearInterval(iv);const n=a.length||1;res({p:a.reduce((s,x)=>s+x.p,0)/n,r:a.reduce((s,x)=>s+x.r,0)/n})},ms)})}
 
-function sampleLive(ms){return new Promise(res=>{const a=[];const iv=setInterval(()=>a.push(live()),50);
-  setTimeout(()=>{clearInterval(iv);const n=a.length||1;res({p:a.reduce((s,x)=>s+x.p,0)/n,r:a.reduce((s,x)=>s+x.r,0)/n})},ms)})}
+/* ---------- guided spot check ---------- */
+const THR={strict:0.05,normal:0.08,relaxed:0.15}; // max range (deg) of pitch and roll while "still"
+const QUIET_MS=1500, MIN_N=15, MOVE_DEG=0.5;
+let flow={on:false,i:0,st:"settle",t0:0,only:false}, buf=[], flowQuiet=0;
+
+// Walk back from the newest sample while pitch and roll range stay within thr.
+function quietWindow(thr){
+  let n=0,sp=0,sr=0,oldest=0,a=Infinity,b=-Infinity,c=Infinity,d=-Infinity;
+  for(let k=buf.length-1;k>=0;k--){const s=buf[k]; if(s.t<flow.t0)break;
+    const a2=Math.min(a,s.p),b2=Math.max(b,s.p),c2=Math.min(c,s.r),d2=Math.max(d,s.r);
+    if(b2-a2>thr||d2-c2>thr)break;
+    a=a2;b=b2;c=c2;d=d2;n++;sp+=s.p;sr+=s.r;oldest=s.t}
+  return {n,ms:n?buf[buf.length-1].t-oldest:0,p:n?sp/n:0,r:n?sr/n:0};
+}
+function recentMean(ms){
+  const now=performance.now(), a=buf.filter(s=>s.t>=Math.max(flow.t0,now-ms));
+  if(!a.length)return liveRaw();
+  return {p:a.reduce((s,x)=>s+x.p,0)/a.length,r:a.reduce((s,x)=>s+x.r,0)/a.length};
+}
+function flowTick(){
+  if(!flow.on||(!raw.has&&!sim))return;
+  const now=performance.now();
+  const l=liveRaw(); buf.push({t:now,p:l.p,r:l.r});
+  while(buf.length&&now-buf[0].t>20000)buf.shift();
+  if(flow.st==="settle"){
+    const q=quietWindow(THR[opts.strict]||THR.normal); flowQuiet=q.ms;
+    if(q.ms>=QUIET_MS&&q.n>=MIN_N)flowCapture(q.p,q.r);
+  }else{
+    const a=buf.filter(s=>s.t>=Math.max(flow.t0,now-QUIET_MS));
+    if(a.length>=2){const rp=Math.max(...a.map(s=>s.p))-Math.min(...a.map(s=>s.p)), rr=Math.max(...a.map(s=>s.r))-Math.min(...a.map(s=>s.r));
+      if(Math.max(rp,rr)>MOVE_DEG)flowMoved()}
+  }
+}
+function flowCapture(p,r){
+  const k=SPOTS[flow.i][0]; spots[k]={p,r};
+  const h=hist[prof().id]; if(h&&h[0]){h[0].spots=JSON.parse(JSON.stringify(spots));persist()}
+  if(flow.only){flow.on=false;tone([660,880],"Captured")}
+  else if(flow.i>=SPOTS.length-1){flow.on=false;tone([660,880,1100],"All spots captured")}
+  else{flow.i++;flow.st="waitmove";flow.t0=performance.now();tone([660,880],"Move to "+SAY[flow.i])}
+  render();
+}
+function flowMoved(){flow.st="settle";flow.t0=performance.now();flowQuiet=0;render()}
+function flowStart(only){
+  if(only==null)spots={};
+  flow={on:true,i:only==null?0:only,st:"settle",t0:performance.now(),only:only!=null};
+  buf=[];flowQuiet=0;
+  try{AC=AC||new (window.AudioContext||window.webkitAudioContext)();if(AC.state==="suspended")AC.resume()}catch(e){}
+  speak("Hold still at "+SAY[flow.i]);
+  render();
+}
+function flowStop(){flow.on=false;render()}
+function flowText(){
+  const n=SPOTS[flow.i][1];
+  return flow.st==="settle"?`Hold still at <b>${n}</b>…${flow.only?"":` <span class="mut" style="font-weight:400">(spot ${flow.i+1} of ${SPOTS.length})</span>`}`
+    :`✅ Captured. Move the phone to <b>${n}</b>.`;
+}
+function flowBox(){
+  if(!flow.on)return `<button class="pri" id="flowStart" style="width:100%">Start guided spot check</button>`;
+  return `<div class="guide" id="flowMsg">${flowText()}</div><div class="bar"><i id="flowBar"></i></div>
+  <div class="row" style="margin-top:8px"><button id="flowNow" class="pri">Capture now</button><button id="flowMoved">I've moved it</button><button id="flowStop">Stop</button></div>`;
+}
+setInterval(flowTick,50);
 
 function spotSummary(p){
   const got=SPOTS.filter(([k])=>spots[k]);
@@ -354,19 +491,21 @@ function viewSpots(){
   const p=prof();
   const rows=SPOTS.map(([k,n])=>{const s=spots[k];
     return `<div class="card" style="margin:8px 0;padding:10px"><div class="row"><div><b>${n}</b><br><span class="mut">${s?`pitch <span class="${cls(s.p-p.pitch,p.tolP)}">${s.p.toFixed(2)}°</span> · roll <span class="${cls(s.r,p.tolR)}">${f2(s.r)}°</span>`:"not captured"}</span></div>
-    <button data-spot="${k}" class="${s?"":"pri"}" style="flex:0 0 auto">${s?"Redo":"Capture"}</button></div></div>`}).join("");
+    <button data-spot="${k}" class="${s?"":"pri"}" style="flex:0 0 auto" ${flow.on?"disabled":""}>${s?"Redo":"Capture"}</button></div></div>`}).join("");
   const h=(hist[p.id]||[]).filter(x=>x.spots).slice(0,4);
   return `<div class="card"><h2>6. Spot check</h2>
-  <p class="mut">Move the phone to each spot (same direction, glass still off, flat on bare wood) and tap Capture. Playfields are rarely perfectly flat, so this shows how much the pitch changes across the playfield.</p>
+  <p class="mut">Guided: start at the <b>top</b>, hold the phone still (same direction, glass still off, flat on bare wood). It captures on its own, beeps and vibrates, then waits while you move to the <b>middle</b>, then the <b>bottom</b>. Playfields are rarely perfectly flat, so this shows how much the pitch changes across the playfield.</p>
   <p class="mut">Reference spot for this machine: <b>${esc(p.refSpot||"Mid-playfield (app default)")}</b></p>
   <div class="read"><div><small>PITCH</small><b id="pv">–</b></div><div><small>ROLL</small><b id="rv">–</b></div></div>
+  <label>Settle strictness<select id="oStrict">${[["strict","Strict (0.05°)"],["normal","Normal (0.08°)"],["relaxed","Relaxed (0.15°)"]].map(([k,n])=>`<option value="${k}" ${opts.strict===k?"selected":""}>${n}</option>`).join("")}</select></label>
+  <div style="margin-top:10px">${flowBox()}</div>
   ${rows}${spotSummary(p)}
   ${h.length?`<p class="mut">Past spot checks:</p><ul class="mut">${h.map(x=>`<li>${new Date(x.t).toLocaleDateString()}: ${SPOTS.filter(([k])=>x.spots[k]).map(([k,n])=>n.split(" ").pop()+" "+x.spots[k].p.toFixed(2)+"°/"+f2(x.spots[k].r)+"°").join(", ")}</li>`).join("")}</ul>`:""}
   <div class="row"><button id="back">Back</button><button class="pri" id="next">Start over</button></div></div>`;
 }
 
 function bind(){
-  const go=n=>{if(n<=2)spots={};step=n;okSince=0;chimed=false;hold=0;saved=false;render()};
+  const go=n=>{flow.on=false;if(n<=2)spots={};step=n;okSince=0;chimed=false;hold=0;saved=false;render()};
   const nx=$("#next"), bk=$("#back");
   if(nx)nx.onclick=()=>{ if(step===5)go(2); else if(step===4)go(saved?5:2); else go(step+1) };
   if(bk)bk.onclick=()=>go(Math.max(0,step-1));
@@ -383,11 +522,16 @@ function bind(){
     render(); $("#calStat").textContent+=` · offset saved. Surface tilt ≈ ${tilt.toFixed(2)}°`; };
   const cr=$("#calReset"); if(cr)cr.onclick=()=>{off={p:0,r:0};calA=calB=null;persist();render()};
   [["oFlip","flip"],["oBeep","beep"],["oSpeak","speak"]].forEach(([id,k])=>{const e=$("#"+id);if(e)e.onchange=()=>{opts[k]=e.checked;persist()}});
-  document.querySelectorAll("[data-spot]").forEach(btn=>btn.onclick=async()=>{
-    btn.textContent="Hold still…";btn.disabled=true;
-    spots[btn.dataset.spot]=await sampleLive(1500);
-    const h=hist[prof().id]; if(h&&h[0]){h[0].spots=JSON.parse(JSON.stringify(spots));persist()}
-    render();});
+  document.querySelectorAll("[data-spot]").forEach(btn=>btn.onclick=()=>flowStart(SPOTS.findIndex(s=>s[0]===btn.dataset.spot)));
+  const fs=$("#flowStart"); if(fs)fs.onclick=()=>flowStart();
+  const fn=$("#flowNow"); if(fn)fn.onclick=()=>{const m=recentMean(QUIET_MS);flowCapture(m.p,m.r)};
+  const fm=$("#flowMoved"); if(fm)fm.onclick=flowMoved;
+  const fp=$("#flowStop"); if(fp)fp.onclick=flowStop;
+  const os=$("#oStrict"); if(os)os.onchange=()=>{opts.strict=os.value;persist()};
+  const ll=$("#logLink"); if(ll)ll.onclick=e=>{e.preventDefault();showLog=!showLog;render()};
+  const ul=$("#updLink"); if(ul)ul.onclick=e=>{e.preventDefault();checkUpdate()};
+  const ud=$("#updDismiss"); if(ud)ud.onclick=()=>{showUpd=false;render()};
+  bindUpd();
   const sp=$("#simP"),sr=$("#simR");
   if(sp)sp.oninput=()=>{sim.p=+sp.value;$("#sp").textContent=sim.p.toFixed(2)};
   if(sr)sr.oninput=()=>{sim.r=+sr.value;$("#sr").textContent=sim.r.toFixed(2)};
@@ -411,6 +555,10 @@ function bindEditor(){
 }
 
 /* ---------- boot ---------- */
+{ // remember the last-seen version; show an "Updated" card when it changed (or when upgrading from a pre-versioning build)
+  const prev=LS("pl.ver");
+  if(prev!==VERSION){ if(prev||hadSaved){showUpd=true;updFrom=prev||"earlier"} save("pl.ver",VERSION); }
+}
 (function loop(){ if(step>=1)update(); requestAnimationFrame(loop) })();
 if("serviceWorker" in navigator && location.protocol==="https:"){ /* optional: add sw.js for offline */ }
 // Android Chrome grants sensors without a prompt; start early if allowed.
