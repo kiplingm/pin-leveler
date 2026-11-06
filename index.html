@@ -54,9 +54,10 @@ a{color:var(--acc)}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="1.5.0";
+const VERSION="1.6.0";
 const BUILD_DATE="2026-11-06";
 const CHANGELOG=[
+ ["1.6.0","2026-11-06","Reference spot: pick top, middle or bottom per machine. Roll, Pitch and Verify use it, spot check shows the other spots as offsets from it, and the spread is compared with your last check."],
  ["1.5.0","2026-11-06","Version number in header and footer, What's new list, Check for updates, and an Updated card after an upgrade."],
  ["1.4.0","2026-11-06","Guided spot check: auto-captures when the phone is still, signals with a tone and vibration, then waits for you to move to the next spot (top, middle, bottom). Settle strictness option and per-spot Redo."]
 ];
@@ -71,14 +72,14 @@ const $=s=>document.querySelector(s);
  spanFB/spanLR: distance between leg centers (in) front-to-back / left-to-right
  tpi: leveler threads per inch (3/8-16 = 16, 1/2-13 = 13)
  NOTE: preset numbers are typical starting values. Confirm against the machine's manual. */
-const GEN={refSpot:"Mid-playfield (app default)",tolP:0.2,tolR:0.1,tpi:16,manualUrl:"",src:"Generic default (unverified)",tips:{}};
+const GEN={refKey:"mid",refSpot:"Mid-playfield (app default)",tolP:0.2,tolR:0.1,tpi:16,manualUrl:"",src:"Generic default (unverified)",tips:{}};
 const PRESETS=[
  {...GEN,name:"Generic standard body",pitch:6.5,spanFB:38,spanLR:20,notes:"Typical value. Confirm in your manual."},
  {...GEN,name:"Generic widebody",pitch:6.5,spanFB:38,spanLR:26,notes:"Typical value. Confirm in your manual."},
  {...GEN,name:"Williams/Bally WPC era",pitch:6.5,spanFB:38,spanLR:20,notes:"Typical value. Confirm in your manual."},
  {...GEN,name:"Stern (SAM/Spike)",pitch:6.5,spanFB:38,spanLR:20,notes:"Typical value. Confirm in your manual."},
  {...GEN,name:"Jersey Jack",pitch:6.5,spanFB:38,spanLR:26,notes:"Typical value. Confirm in your manual."},
- {...GEN,key:"t3",name:"Terminator 3: Rise of the Machines (Stern 2003)",pitch:6.5,spanFB:38,spanLR:20,
+ {...GEN,key:"t3",refKey:"flip",name:"Terminator 3: Rise of the Machines (Stern 2003)",pitch:6.5,spanFB:38,spanLR:20,
   manualUrl:"https://sternpinball.com/wp-content/uploads/2018/11/Terminator3_Manual.pdf",
   src:"Stern manual (documented)",refSpot:"The manual puts the bubble level on the lower-right wood rail. The app default is mid-playfield, so also check there.",notes:"6.5° per the Stern manual. Spans are estimates; measure yours.",
   tips:{
@@ -124,6 +125,9 @@ let opts=Object.assign({flip:false,beep:true,speak:false,strict:"normal"},LS("pl
 let hist=LS("pl.hist")||{};
 const tipsHtml=(ph,title)=>{const t=(prof().tips||{})[ph];return t&&t.length?`<div class="card" style="border-color:var(--acc)"><h2>${title||"Machine notes"}</h2><ul class="mut">${t.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""};
 const prof=()=>P.find(x=>x.id===cur)||P[0];
+// reference spot key (top|mid|flip). Older saved profiles have none: fall back to the built-in's, else mid.
+const refKey=p=>p.refKey||(PRESETS.find(x=>x.key&&x.key===p.key)||{}).refKey||"mid";
+const refName=p=>(SPOTS.find(s=>s[0]===refKey(p))||SPOTS[1])[1];
 const persist=()=>{save("pl.profiles",P);save("pl.cur",cur);save("pl.off",off);save("pl.opts",opts);save("pl.hist",hist)};
 
 /* ---------- sensors ---------- */
@@ -271,6 +275,7 @@ function viewSetup(p){
   <div class="grid2" style="margin-top:8px"><div class="mut">Target pitch<br><b style="font-size:22px;color:var(--tx)">${p.pitch}°</b></div>
   <div class="mut">Tolerance<br><b style="font-size:16px;color:var(--tx)">±${p.tolP}° pitch · ±${p.tolR}° roll</b></div></div>
   <p class="tag">Source: ${esc(p.src||"User-defined")}</p>
+  <p class="mut">Reference spot: <b style="color:var(--tx)">${refName(p)}</b>. Roll, Pitch and Verify are measured there.</p>
   <p class="mut">${esc(p.notes||"")}</p>
   <div class="row fit"><button id="editBtn">Edit / docs</button><button id="newBtn">New</button><button id="dupBtn">Duplicate</button>${P.length>1?`<button id="delBtn">Delete</button>`:""}</div></div>
   ${tipsHtml("setup","Notes for this machine")}
@@ -294,7 +299,8 @@ function editorHtml(){
   <label>Leg spacing front↔rear (in)<input data-f="spanFB" type="number" step="0.5" value="${p.spanFB}"></label>
   <label>Leg spacing left↔right (in)<input data-f="spanLR" type="number" step="0.5" value="${p.spanLR}"></label></div>
   <label>Manual URL<input data-f="manualUrl" value="${esc(p.manualUrl)}" placeholder="https://..."></label>
-  <label>Reference spot<input data-f="refSpot" value="${esc(p.refSpot||"")}"></label>
+  <label>Reference spot (where Roll, Pitch and Verify are measured)<select data-f="refKey">${SPOTS.map(([k,n])=>`<option value="${k}" ${refKey(p)===k?"selected":""}>${n}</option>`).join("")}</select></label>
+  <label>Reference spot notes<input data-f="refSpot" value="${esc(p.refSpot||"")}"></label>
   <label>Source / confidence<input data-f="src" value="${esc(p.src||"")}"></label>
   <label>Notes<textarea data-f="notes" rows="2">${esc(p.notes)}</textarea></label>
   ${[["setup","Setup notes"],["roll","Roll notes"],["pitch","Pitch notes"],["verify","Verify notes"]].map(([k,n])=>`<label>${n} (one per line)<textarea data-tip="${k}" rows="2">${esc(((p.tips||{})[k]||[]).join("\n"))}</textarea></label>`).join("")}
@@ -327,9 +333,10 @@ function viewCal(){
 }
 
 function viewLive(){
-  const intro=step===2?`<h2>3. Side-to-side (roll)</h2><p class="mut">Lay the phone flat on the playfield, <b>top of the phone toward the backbox</b>. We'll fix roll with the <b>front legs</b>.</p>`
-   :step===3?`<h2>4. Front-to-back (pitch)</h2><p class="mut">Same phone position. We'll set pitch by moving the <b>rear legs together</b>, so roll stays put.</p>`
-   :`<h2>5. Verify</h2><p class="mut">Hold both in tolerance for 3 seconds.</p>`;
+  const where=`<p class="mut">Measure at the <b>reference spot: ${refName(prof())}</b>.${prof().refSpot&&refKey(prof())!=="mid"?" "+esc(prof().refSpot):""}</p>`;
+  const intro=step===2?`<h2>3. Side-to-side (roll)</h2><p class="mut">Lay the phone flat on the playfield, <b>top of the phone toward the backbox</b>. We'll fix roll with the <b>front legs</b>.</p>${where}`
+   :step===3?`<h2>4. Front-to-back (pitch)</h2><p class="mut">Same phone position. We'll set pitch by moving the <b>rear legs together</b>, so roll stays put.</p>${where}`
+   :`<h2>5. Verify</h2><p class="mut">Hold both in tolerance for 3 seconds.</p>${where}`;
   return tipsHtml(["roll","pitch","verify"][step-2])+`<div class="card">${intro}
   <div class="read"><div><small>PITCH (target ${prof().pitch}°)</small><b id="pv">–</b></div><div><small>ROLL (0° target)</small><b id="rv">–</b></div></div>
   <div class="bubble"><div class="t"></div><div class="d" id="dot"></div></div>
@@ -482,20 +489,31 @@ function spotSummary(p){
     :`<p class="near">⚠ Pitch varies by ${sp.toFixed(2)}° (highest ${hi(ps).n.toLowerCase()}, lowest ${lo(ps).n.toLowerCase()}). That points to the playfield or cabinet (curve, warp, mounting), not the legs. Keep the legs set from the mid-playfield reading and judge by play.</p>`);
   out.push(sr<=p.tolR*1.5?`<p class="good">✅ Roll is consistent across spots (range ${sr.toFixed(2)}°).</p>`
     :`<p class="near">⚠ Roll varies by ${sr.toFixed(2)}° between spots. A twisted or warped playfield or cabinet is likely. Re-check that the phone sits flat on bare wood, not on an insert or plastic.</p>`);
-  const m=spots.mid; if(m&&(Math.abs(m.p-p.pitch)>p.tolP||Math.abs(m.r)>p.tolR))
-    out.push(`<p class="far">Mid-playfield reads off target (pitch ${m.p.toFixed(2)}°, roll ${f2(m.r)}°). Go back to Roll and Pitch and adjust.</p>`);
+  const rk=refKey(p), m=spots[rk];
+  if(sp>1||sr>1)out.push(`<p class="far">A spread over 1° usually means the phone was resting on an insert or plastic. Redo the outlying spot on bare wood before trusting these numbers.</p>`);
+  if(m&&(Math.abs(m.p-p.pitch)>p.tolP||Math.abs(m.r)>p.tolR))
+    out.push(`<p class="far">The reference spot (${refName(p).toLowerCase()}) reads off target (pitch ${m.p.toFixed(2)}°, roll ${f2(m.r)}°). Go back to Roll and Pitch and adjust.</p>`);
+  // compare the spread (offsets from the reference spot) with the previous spot check for this machine
+  const prev=(hist[p.id]||[]).slice(1).find(x=>x.spots&&x.spots[rk]);
+  if(m&&prev){
+    const d=SPOTS.filter(([k])=>k!==rk&&spots[k]&&prev.spots[k]).map(([k,n])=>({n,d:(spots[k].p-m.p)-(prev.spots[k].p-prev.spots[rk].p)}));
+    const big=d.filter(x=>Math.abs(x.d)>p.tolP);
+    if(d.length)out.push(big.length
+      ?`<p class="near">⚠ Spread changed since your last check (${new Date(prev.t).toLocaleDateString()}): ${big.map(x=>`${x.n.toLowerCase()} ${f2(x.d)}°`).join(", ")}. A growing change can mean the playfield or cabinet is warping or has shifted.</p>`
+      :`<p class="good">✅ Spread matches your last check (${new Date(prev.t).toLocaleDateString()}).</p>`);
+  }
   return out.join("");
 }
 
 function viewSpots(){
-  const p=prof();
+  const p=prof(), rk=refKey(p), R=spots[rk];
   const rows=SPOTS.map(([k,n])=>{const s=spots[k];
-    return `<div class="card" style="margin:8px 0;padding:10px"><div class="row"><div><b>${n}</b><br><span class="mut">${s?`pitch <span class="${cls(s.p-p.pitch,p.tolP)}">${s.p.toFixed(2)}°</span> · roll <span class="${cls(s.r,p.tolR)}">${f2(s.r)}°</span>`:"not captured"}</span></div>
+    return `<div class="card" style="margin:8px 0;padding:10px"><div class="row"><div><b>${n}</b>${k===rk?` <span class="tag">★ reference</span>`:""}<br><span class="mut">${s?`pitch <span class="${cls(s.p-p.pitch,p.tolP)}">${s.p.toFixed(2)}°</span> · roll <span class="${cls(s.r,p.tolR)}">${f2(s.r)}°</span>${R&&k!==rk?`<br>vs reference: pitch <b>${f2(s.p-R.p)}°</b> · roll <b>${f2(s.r-R.r)}°</b>`:""}`:"not captured"}</span></div>
     <button data-spot="${k}" class="${s?"":"pri"}" style="flex:0 0 auto" ${flow.on?"disabled":""}>${s?"Redo":"Capture"}</button></div></div>`}).join("");
   const h=(hist[p.id]||[]).filter(x=>x.spots).slice(0,4);
   return `<div class="card"><h2>6. Spot check</h2>
   <p class="mut">Guided: start at the <b>top</b>, hold the phone still (same direction, glass still off, flat on bare wood). It captures on its own, beeps and vibrates, then waits while you move to the <b>middle</b>, then the <b>bottom</b>. Playfields are rarely perfectly flat, so this shows how much the pitch changes across the playfield.</p>
-  <p class="mut">Reference spot for this machine: <b>${esc(p.refSpot||"Mid-playfield (app default)")}</b></p>
+  <p class="mut">Reference spot for this machine: <b>${refName(p)}</b>${p.refSpot?` <span class="mut">(${esc(p.refSpot)})</span>`:""}. The other spots are shown as offsets from it. Change it under Edit / docs.</p>
   <div class="read"><div><small>PITCH</small><b id="pv">–</b></div><div><small>ROLL</small><b id="rv">–</b></div></div>
   <label>Settle strictness<select id="oStrict">${[["strict","Strict (0.05°)"],["normal","Normal (0.08°)"],["relaxed","Relaxed (0.15°)"]].map(([k,n])=>`<option value="${k}" ${opts.strict===k?"selected":""}>${n}</option>`).join("")}</select></label>
   <div style="margin-top:10px">${flowBox()}</div>
