@@ -1,0 +1,421 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0e1116">
+<title>Pin Leveler</title>
+<style>
+:root{--bg:#0e1116;--card:#171c24;--line:#262d38;--tx:#e8edf3;--mut:#8b97a7;--ok:#4ade80;--warn:#fbbf24;--bad:#f87171;--acc:#60a5fa}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;padding:env(safe-area-inset-top) 0 env(safe-area-inset-bottom)}
+#app{max-width:560px;margin:0 auto;padding:12px 14px 40px}
+header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+h1{font-size:18px;margin:0}
+.dots{display:flex;gap:6px}.dots i{width:10px;height:10px;border-radius:50%;background:var(--line)}.dots i.on{background:var(--acc)}.dots i.done{background:var(--ok)}
+.card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px;margin-bottom:12px}
+h2{font-size:17px;margin:0 0 6px}
+p{margin:6px 0}.mut{color:var(--mut);font-size:14px}
+button,select,input,textarea{font:inherit;color:var(--tx);background:#0b0f14;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
+button{cursor:pointer;background:#1f2733}
+button.pri{background:var(--acc);color:#04111f;border:0;font-weight:700}
+button.ok{background:var(--ok);color:#03150a;border:0;font-weight:700}
+button:disabled{opacity:.4}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}.row>*{flex:1}
+.row.fit>*{flex:0 0 auto}
+label{display:block;font-size:13px;color:var(--mut);margin-top:8px}
+label input,label select,label textarea{width:100%;margin-top:3px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.read{display:grid;grid-template-columns:1fr 1fr;gap:8px;text-align:center}
+.read div{background:#0b0f14;border:1px solid var(--line);border-radius:12px;padding:8px}
+.read b{display:block;font:700 34px/1.1 ui-monospace,Menlo,monospace}
+.read small{color:var(--mut)}
+.good{color:var(--ok)}.near{color:var(--warn)}.far{color:var(--bad)}
+.bubble{position:relative;width:200px;height:200px;margin:10px auto;border-radius:50%;border:2px solid var(--line);background:radial-gradient(circle,#0b0f14 0,#0b0f14 100%)}
+.bubble:before,.bubble:after{content:"";position:absolute;background:var(--line)}
+.bubble:before{left:50%;top:0;bottom:0;width:1px}.bubble:after{top:50%;left:0;right:0;height:1px}
+.bubble .t{position:absolute;left:50%;top:50%;width:40px;height:40px;margin:-20px;border:2px solid var(--ok);border-radius:50%}
+.bubble .d{position:absolute;left:50%;top:50%;width:24px;height:24px;margin:-12px;border-radius:50%;background:var(--warn);transition:background .2s}
+.bubble .d.good{background:var(--ok)}.bubble .d.far{background:var(--bad)}
+.guide{font-size:18px;font-weight:600;padding:10px 12px;border-radius:12px;background:#0b0f14;border:1px solid var(--line);min-height:70px}
+.bar{height:8px;background:var(--line);border-radius:6px;overflow:hidden;margin-top:8px}.bar i{display:block;height:100%;width:0;background:var(--ok)}
+.chip{display:inline-block;margin:3px 4px 0 0;padding:6px 10px;border-radius:999px;background:#1f2733;border:1px solid var(--line);font-size:13px;cursor:pointer}
+ol,ul{padding-left:20px;margin:6px 0}li{margin:3px 0}
+.sim{border:1px dashed var(--warn)}
+a{color:var(--acc)}
+.tag{font-size:12px;color:var(--warn)}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+"use strict";
+/* ---------- storage ---------- */
+const LS=k=>{try{return JSON.parse(localStorage.getItem(k))}catch(e){return null}};
+const save=(k,v)=>{try{localStorage.setItem(k,JSON.stringify(v))}catch(e){}};
+const esc=s=>String(s??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const $=s=>document.querySelector(s);
+
+/* ---------- profiles ----------
+ pitch: target playfield pitch (deg, back higher than front)
+ spanFB/spanLR: distance between leg centers (in) front-to-back / left-to-right
+ tpi: leveler threads per inch (3/8-16 = 16, 1/2-13 = 13)
+ NOTE: preset numbers are typical starting values. Confirm against the machine's manual. */
+const GEN={refSpot:"Mid-playfield (app default)",tolP:0.2,tolR:0.1,tpi:16,manualUrl:"",src:"Generic default (unverified)",tips:{}};
+const PRESETS=[
+ {...GEN,name:"Generic standard body",pitch:6.5,spanFB:38,spanLR:20,notes:"Typical value. Confirm in your manual."},
+ {...GEN,name:"Generic widebody",pitch:6.5,spanFB:38,spanLR:26,notes:"Typical value. Confirm in your manual."},
+ {...GEN,name:"Williams/Bally WPC era",pitch:6.5,spanFB:38,spanLR:20,notes:"Typical value. Confirm in your manual."},
+ {...GEN,name:"Stern (SAM/Spike)",pitch:6.5,spanFB:38,spanLR:20,notes:"Typical value. Confirm in your manual."},
+ {...GEN,name:"Jersey Jack",pitch:6.5,spanFB:38,spanLR:26,notes:"Typical value. Confirm in your manual."},
+ {...GEN,key:"t3",name:"Terminator 3: Rise of the Machines (Stern 2003)",pitch:6.5,spanFB:38,spanLR:20,
+  manualUrl:"https://sternpinball.com/wp-content/uploads/2018/11/Terminator3_Manual.pdf",
+  src:"Stern manual (documented)",refSpot:"The manual puts the bubble level on the lower-right wood rail. The app default is mid-playfield, so also check there.",notes:"6.5° per the Stern manual. Spans are estimates; measure yours.",
+  tips:{
+   setup:["Manual: the cabinet is designed for 6.5° when all four levelers are turned fully in (1.25 in from floor to bottom of leg). Start there.",
+          "The manual's bubble level sits on the lower-right wood rail. This app replaces it: use the phone on the playfield.",
+          "Extending the rear levelers for more pitch is possible, but the manual says it is not recommended."],
+   roll:["Adjust the front levelers. The manual also suggests rolling a ball down the center of the playfield to sanity-check side-to-side."],
+   pitch:["With all four levelers fully in you should already be near 6.5°. A big miss usually means an uneven floor or a leg problem, so check that before extending the rear levelers far."],
+   verify:["Tighten the jam nuts, then recheck pitch and roll once more."]}},
+ {...GEN,key:"sttng",name:"Star Trek: The Next Generation (Williams 1993, widebody)",pitch:6.5,spanFB:38,spanLR:26,
+  manualUrl:"https://planetarypinball.com/reference/gamemanuals/Star_Trek_The_Next_Generation/files/assets/basic-html/page12.html",
+  src:"Partly confirmed (manual excerpt says plumb bob is factory-set for 6°)",notes:"Williams-era manuals recommend 6 to 6.5°. Confirm on manual pages 12-14.",
+  tips:{
+   setup:["Widebody: side-to-side leg spacing is set to 26 in. Measure yours.",
+          "A manual excerpt says the plumb bob tilt is factory-set for a 6° angle, which suggests a 6° design pitch. This profile uses 6.5° (Williams-era range is 6 to 6.5°). Edit the target if the manual's leveling page says otherwise.",
+          "The game uses six balls."],
+   pitch:["Williams bubble levels: the first line is about 6° and each line after that is about +0.5°."],
+   verify:["Re-set the plumb bob tilt after final pitch: loosen the screw at the bottom of the unit, move the pointer one groove at a time, then tighten."]}},
+ {...GEN,key:"xenon",name:"Xenon (Bally 1980)",pitch:6.5,spanFB:38,spanLR:20,
+  manualUrl:"https://archive.org/download/1979xenonmanual/1979Xenon_Manual_text.pdf",
+  src:"No pitch figure in the manual (6.5° is a general default)",notes:"The Bally manual gives no pitch angle. 6.5° is a solid-state default; 6 to 7° is a normal range.",
+  tips:{
+   setup:["The manual does not give a pitch angle. 6.5° is a general default; adjust by play (6 to 7°).",
+          "Three tilt switches: panel tilt, plumb bob (left side near the coin door), and ball tilt above it.",
+          "Ball count is 3 or 5 via MPU switches 31/32."],
+   verify:["Per the manual, adjust the plumb bob tilt AFTER the game is on location and the levelers are set.",
+           "Ball tilt is set so the ball rolls free to the switch blade if the front of the cabinet is raised."]}},
+ {...GEN,key:"twinky",name:"Twinky (Chicago Coin 1967, EM)",pitch:5,tolP:0.3,tolR:0.15,spanFB:36,spanLR:20,
+  src:"Unverified (no manual or spec found)",notes:"No pitch spec found. About 5° is a common starting point for older EM games.",
+  tips:{
+   setup:["No manual or pitch spec was found. About 5° is a common starting point for older EM machines, so tune it by play in 0.5° steps.",
+          "Leg spacing and leveler thread are estimates. Measure your own and edit the profile.",
+          "If you find the manual or flyer with a leveling note, paste it into the manual box in the editor to update the target."],
+   verify:["Play a few balls. If it plays too slow or too fast, change the target by 0.5° and rerun."]}}
+];
+// add any new built-in machine profiles to existing saved lists
+let P=LS("pl.profiles")||PRESETS.map((p,i)=>({id:p.key?"k_"+p.key:"p"+i,...p}));
+PRESETS.forEach(p=>{ if(p.key && !P.some(x=>x.key===p.key)) P.push({id:"k_"+p.key,...p}); });
+let cur=LS("pl.cur")||P[0].id;
+let off=LS("pl.off")||{p:0,r:0};
+let opts=LS("pl.opts")||{flip:false,beep:true,speak:false};
+let hist=LS("pl.hist")||{};
+const tipsHtml=(ph,title)=>{const t=(prof().tips||{})[ph];return t&&t.length?`<div class="card" style="border-color:var(--acc)"><h2>${title||"Machine notes"}</h2><ul class="mut">${t.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""};
+const prof=()=>P.find(x=>x.id===cur)||P[0];
+const persist=()=>{save("pl.profiles",P);save("pl.cur",cur);save("pl.off",off);save("pl.opts",opts);save("pl.hist",hist)};
+
+/* ---------- sensors ---------- */
+const D=Math.PI/180;
+let raw={p:0,r:0,has:false}, sm={p:0,r:0,init:false}, sim=null;
+function onOri(e){
+  if(e.beta==null||e.gamma==null)return;
+  const wasSim=sim&&sim.auto; raw.has=true;
+  if(wasSim){sim=null;sm.init=false;setTimeout(render,0)}
+  // beta: top edge raised => positive (back higher when phone top points to back). gamma: right edge down => positive.
+  if(!sm.init){sm.p=e.beta;sm.r=e.gamma;sm.init=true}
+  else{sm.p+=(e.beta-sm.p)*0.18;sm.r+=(e.gamma-sm.r)*0.18}
+}
+let sensing=false;
+async function startSensors(){
+  if(sensing)return;
+  try{
+    if(typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission==="function"){
+      const r=await DeviceOrientationEvent.requestPermission(); if(r==="denied"){sim=sim||{auto:true,p:prof().pitch+0.8,r:0.4};render();return;}
+    }
+  }catch(e){}
+  window.addEventListener("deviceorientation",onOri,true);
+  sensing=true;
+  try{ if(navigator.wakeLock) navigator.wakeLock.request("screen").catch(()=>{}); }catch(e){}
+  setTimeout(()=>{ if(!raw.has){ sim=sim||{auto:true,p:prof().pitch+0.8,r:0.4}; render(); } },1800);
+}
+const dir=()=>opts.flip?-1:1;
+function live(){
+  if(sim) return {p:sim.p*dir(),r:sim.r*dir()};
+  return {p:(sm.p-off.p)*dir(),r:(sm.r-off.r)*dir()};
+}
+
+/* ---------- audio ---------- */
+let AC=null;
+function chime(n=1){
+  if(opts.speak&&window.speechSynthesis){try{speechSynthesis.cancel();speechSynthesis.speak(new SpeechSynthesisUtterance(n>1?"Level":"On target"))}catch(e){}}
+  if(!opts.beep)return;
+  try{
+    AC=AC||new (window.AudioContext||window.webkitAudioContext)();
+    for(let i=0;i<n;i++){
+      const o=AC.createOscillator(),g=AC.createGain(),t=AC.currentTime+i*0.18;
+      o.frequency.value=880;g.gain.setValueAtTime(0.2,t);g.gain.exponentialRampToValueAtTime(0.001,t+0.15);
+      o.connect(g);g.connect(AC.destination);o.start(t);o.stop(t+0.16);
+    }
+  }catch(e){}
+}
+
+/* ---------- math helpers ---------- */
+const FR={0:"",1:"⅛",2:"¼",3:"⅜",4:"½",5:"⅝",6:"¾",7:"⅞"};
+function turns(deg,span,tpi){
+  const inches=span*Math.tan(Math.abs(deg)*D);
+  const t=inches*tpi, e=Math.max(1,Math.round(t*8)); // eighths, min 1/8
+  const w=Math.floor(e/8), f=e%8;
+  return {txt:(w?w:"")+FR[f]||"⅛", t, inches};
+}
+const f2=x=>(x>=0?"+":"")+x.toFixed(2);
+const cls=(err,tol)=>{const a=Math.abs(err);return a<=tol?"good":a<=tol*3?"near":"far"};
+
+/* ---------- state ---------- */
+let step=0, okSince=0, chimed=false, hold=0, saved=false, calA=null, calB=null, capturing=false;
+const STEPS=["Setup","Calibrate","Roll","Pitch","Verify","Spots"];
+const SPOTS=[["flip","Near the flippers"],["mid","Mid-playfield"],["top","Near the top"]];
+let spots={};
+
+/* ---------- views ---------- */
+function render(){
+  const p=prof();
+  let h=`<header><h1>🎯 Pin Leveler</h1><div class="dots">${STEPS.map((s,i)=>`<i class="${i===step?"on":i<step?"done":""}" title="${s}"></i>`).join("")}</div></header>`;
+  if(step>=1)h+=`<div class="mut" id="dbg" style="margin:-4px 0 8px;font-size:12px"></div>`;
+  if(sim)h+=`<div class="card sim"><b class="near">⚠ SIMULATED readings: no motion data from this phone.</b> <span class="mut">Open the page over HTTPS in Chrome, allow motion sensors, and reload. These sliders are fake.</span>
+   <label>Pitch <span id="sp">${sim.p.toFixed(2)}</span>°<input id="simP" type="range" min="3" max="10" step="0.05" value="${sim.p}"></label>
+   <label>Roll <span id="sr">${sim.r.toFixed(2)}</span>°<input id="simR" type="range" min="-3" max="3" step="0.05" value="${sim.r}"></label></div>`;
+  if(step===0) h+=viewSetup(p);
+  if(step===1) h+=viewCal();
+  if(step===2||step===3||step===4) h+=viewLive();
+  if(step===5) h+=viewSpots();
+  $("#app").innerHTML=h; bind(); update();
+}
+
+function viewSetup(p){
+  return `<div class="card"><h2>1. Pick the machine</h2>
+  <label>Machine profile<select id="profSel">${P.map(x=>`<option value="${x.id}" ${x.id===cur?"selected":""}>${esc(x.name)}</option>`).join("")}</select></label>
+  <div class="grid2" style="margin-top:8px"><div class="mut">Target pitch<br><b style="font-size:22px;color:var(--tx)">${p.pitch}°</b></div>
+  <div class="mut">Tolerance<br><b style="font-size:16px;color:var(--tx)">±${p.tolP}° pitch · ±${p.tolR}° roll</b></div></div>
+  <p class="tag">Source: ${esc(p.src||"User-defined")}</p>
+  <p class="mut">${esc(p.notes||"")}</p>
+  <div class="row fit"><button id="editBtn">Edit / docs</button><button id="newBtn">New</button><button id="dupBtn">Duplicate</button>${P.length>1?`<button id="delBtn">Delete</button>`:""}</div></div>
+  ${tipsHtml("setup","Notes for this machine")}
+  <div id="editor"></div>
+  <div class="card"><h2>2. Prep the machine</h2><ol>
+  <li>Machine in its final spot, on its final floor.</li>
+  <li>Remove the glass. Balls out of play, or locked in the trough.</li>
+  <li>Loosen leveler jam nuts. Start with all four legs about the same length.</li>
+  <li>You'll need a flat, open area of playfield to rest the phone (not on a ramp, insert or plastic).</li></ol>
+  <button class="pri" id="startBtn" style="width:100%">Start (enable motion sensor)</button></div>`;
+}
+
+function editorHtml(){
+  const p=prof();
+  return `<div class="card"><h2>Profile & documentation</h2>
+  <label>Name<input data-f="name" value="${esc(p.name)}"></label>
+  <div class="grid2"><label>Target pitch (°)<input data-f="pitch" type="number" step="0.05" value="${p.pitch}"></label>
+  <label>Leveler thread (TPI)<select data-f="tpi"><option value="16" ${p.tpi==16?"selected":""}>3/8"-16 (16 TPI)</option><option value="13" ${p.tpi==13?"selected":""}>1/2"-13 (13 TPI)</option><option value="18" ${p.tpi==18?"selected":""}>5/16"-18 (18 TPI)</option></select></label>
+  <label>Pitch tolerance ±°<input data-f="tolP" type="number" step="0.05" value="${p.tolP}"></label>
+  <label>Roll tolerance ±°<input data-f="tolR" type="number" step="0.05" value="${p.tolR}"></label>
+  <label>Leg spacing front↔rear (in)<input data-f="spanFB" type="number" step="0.5" value="${p.spanFB}"></label>
+  <label>Leg spacing left↔right (in)<input data-f="spanLR" type="number" step="0.5" value="${p.spanLR}"></label></div>
+  <label>Manual URL<input data-f="manualUrl" value="${esc(p.manualUrl)}" placeholder="https://..."></label>
+  <label>Reference spot<input data-f="refSpot" value="${esc(p.refSpot||"")}"></label>
+  <label>Source / confidence<input data-f="src" value="${esc(p.src||"")}"></label>
+  <label>Notes<textarea data-f="notes" rows="2">${esc(p.notes)}</textarea></label>
+  ${[["setup","Setup notes"],["roll","Roll notes"],["pitch","Pitch notes"],["verify","Verify notes"]].map(([k,n])=>`<label>${n} (one per line)<textarea data-tip="${k}" rows="2">${esc(((p.tips||{})[k]||[]).join("\n"))}</textarea></label>`).join("")}
+  <div class="row fit" style="margin-top:8px"><a href="https://www.google.com/search?q=${encodeURIComponent(p.name+" pinball manual playfield pitch degrees")}" target="_blank" rel="noopener">Search manual</a>
+  <a href="https://pinside.com/pinball/forum/search?q=${encodeURIComponent(p.name+" pitch")}" target="_blank" rel="noopener">Pinside</a>
+  ${p.manualUrl?`<a href="${esc(p.manualUrl)}" target="_blank" rel="noopener">Open manual</a>`:""}</div>
+  <label>Paste text from the manual (finds pitch numbers)<textarea id="manualText" rows="3" placeholder="Paste the leveling section here"></textarea></label>
+  <div id="found"></div>
+  <div class="row fit" style="margin-top:10px"><button id="expBtn">Export profiles</button><label style="margin:0"><span class="chip">Import<input id="impFile" type="file" accept="application/json" hidden></span></label></div></div>`;
+}
+
+function findAngles(text){
+  const out=[],re=/(\d{1,2}(?:\.\d+)?)\s*(?:°|degrees?|deg\b)/gi;let m;
+  while((m=re.exec(text))){
+    const v=parseFloat(m[1]); if(v<1||v>15)continue;
+    const ctx=text.slice(Math.max(0,m.index-50),m.index+m[0].length+30).replace(/\s+/g," ");
+    out.push({v,ctx,score:/pitch|incline|slope|angle|tilt|level/i.test(ctx)?1:0});
+  }
+  return out.sort((a,b)=>b.score-a.score).slice(0,6);
+}
+
+function viewCal(){
+  return `<div class="card"><h2>Calibrate the phone (optional, ~20 s)</h2>
+  <p>Phone sensors are often off by 0.1–0.5°. This cancels it, and <b>any</b> flat-ish surface works.</p>
+  <ol><li>Lay the phone on a hard surface. Tap <b>Capture A</b>.</li><li>Rotate the phone 180° <b>in the same spot</b>. Tap <b>Capture B</b>.</li></ol>
+  <div class="row"><button id="capA" class="pri">Capture A</button><button id="capB" ${calA?"":"disabled"} class="pri">Capture B</button></div>
+  <p class="mut" id="calStat">${calA?`A: ${calA.p.toFixed(2)}°, ${calA.r.toFixed(2)}°`:""}${calB?` · B: ${calB.p.toFixed(2)}°, ${calB.r.toFixed(2)}°`:""}</p>
+  <p class="mut">Current offset: pitch ${off.p.toFixed(2)}°, roll ${off.r.toFixed(2)}° <button id="calReset" style="padding:4px 8px">reset</button></p>
+  <div class="row"><button id="back">Back</button><button class="pri" id="next">${calB?"Next":"Skip"}</button></div></div>`;
+}
+
+function viewLive(){
+  const intro=step===2?`<h2>3. Side-to-side (roll)</h2><p class="mut">Lay the phone flat on the playfield, <b>top of the phone toward the backbox</b>. We'll fix roll with the <b>front legs</b>.</p>`
+   :step===3?`<h2>4. Front-to-back (pitch)</h2><p class="mut">Same phone position. We'll set pitch by moving the <b>rear legs together</b>, so roll stays put.</p>`
+   :`<h2>5. Verify</h2><p class="mut">Hold both in tolerance for 3 seconds.</p>`;
+  return tipsHtml(["roll","pitch","verify"][step-2])+`<div class="card">${intro}
+  <div class="read"><div><small>PITCH (target ${prof().pitch}°)</small><b id="pv">–</b></div><div><small>ROLL (0° target)</small><b id="rv">–</b></div></div>
+  <div class="bubble"><div class="t"></div><div class="d" id="dot"></div></div>
+  <p class="mut" style="text-align:center;margin-top:-4px">Dot = where a ball would drift</p>
+  <div class="guide" id="guide"></div>
+  <div class="bar"><i id="holdBar"></i></div>
+  <div id="result"></div>
+  <div class="row" style="margin-top:12px"><button id="back">Back</button><button class="pri" id="next">${step===4?"Start over":"Next"}</button></div>
+  <div class="row fit" style="margin-top:10px"><label style="margin:0"><input type="checkbox" id="oFlip" ${opts.flip?"checked":""} style="width:auto"> Phone top → FRONT</label>
+  <label style="margin:0"><input type="checkbox" id="oBeep" ${opts.beep?"checked":""} style="width:auto"> Beep</label>
+  <label style="margin:0"><input type="checkbox" id="oSpeak" ${opts.speak?"checked":""} style="width:auto"> Voice</label></div></div>`;
+}
+
+/* ---------- live update ---------- */
+function guideText(l,p){
+  const eP=l.p-p.pitch, eR=l.r;
+  if(step===2){
+    if(Math.abs(eR)<=p.tolR)return {ok:true,t:`✅ Roll is level (${f2(eR)}°). Tap Next.`};
+    const g=turns(eR,p.spanLR,p.tpi), side=eR>0?"RIGHT":"LEFT", other=eR>0?"LEFT":"RIGHT";
+    return {ok:false,t:`${side} side is low by ${Math.abs(eR).toFixed(2)}°.<br>Extend the <b>${side} front leg ≈ ${g.txt} turn${g.t>1.1?"s":""}</b><br><span class="mut" style="font-weight:400">or retract the ${other} front leg by the same.</span>`};
+  }
+  if(step===3){
+    if(Math.abs(eP)<=p.tolP)return {ok:true,t:`✅ Pitch is on target (${l.p.toFixed(2)}°). Tap Next.`};
+    const g=turns(eP,p.spanFB,p.tpi);
+    if(eP<0)return {ok:false,t:`Needs ${Math.abs(eP).toFixed(2)}° more pitch.<br>Extend <b>both rear legs ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b><br><span class="mut" style="font-weight:400">or retract both front legs.</span>`};
+    return {ok:false,t:`${eP.toFixed(2)}° too steep.<br>Retract <b>both rear legs ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b><br><span class="mut" style="font-weight:400">or extend both front legs.</span>`};
+  }
+  const okP=Math.abs(eP)<=p.tolP, okR=Math.abs(eR)<=p.tolR;
+  if(okP&&okR)return {ok:true,t:`✅ In tolerance. Hold still…`};
+  const bits=[];
+  if(!okR)bits.push(`Roll off by ${f2(eR)}° (${eR>0?"right":"left"} low): go back and fix with the front legs.`);
+  if(!okP)bits.push(`Pitch off by ${f2(eP)}°: go back and adjust the rear legs.`);
+  return {ok:false,t:bits.join("<br>")};
+}
+
+function update(){
+  const p=prof(), l=live();
+  const d=$("#dbg"); if(d) d.textContent= sim?"Sensor: NO DATA (simulating)":(raw.has?`Sensor: live · raw pitch ${sm.p.toFixed(2)}° roll ${sm.r.toFixed(2)}° · offset ${off.p.toFixed(2)}°/${off.r.toFixed(2)}°`:"Sensor: waiting for data…");
+  if(step===1){
+    const c=$("#calStat"); if(c&&!capturing&&!calA)c.textContent=`Live: ${sm.p.toFixed(2)}°, ${sm.r.toFixed(2)}°`;
+    return;
+  }
+  if(step===5){const a=$("#pv"),b=$("#rv"); if(a){a.textContent=l.p.toFixed(2)+"°";a.className=cls(l.p-p.pitch,p.tolP);b.textContent=f2(l.r)+"°";b.className=cls(l.r,p.tolR)} return;}
+  if(step<2)return;
+  const pv=$("#pv"),rv=$("#rv"); if(!pv)return;
+  const eP=l.p-p.pitch;
+  pv.textContent=l.p.toFixed(2)+"°"; pv.className=cls(eP,p.tolP);
+  rv.textContent=f2(l.r)+"°"; rv.className=cls(l.r,p.tolR);
+  const dot=$("#dot"), sc=45; // px per degree
+  const dx=Math.max(-90,Math.min(90,l.r*sc)), dy=Math.max(-90,Math.min(90,eP*sc));
+  dot.style.transform=`translate(${dx}px,${dy}px)`;
+  dot.className="d "+(Math.abs(eP)<=p.tolP&&Math.abs(l.r)<=p.tolR?"good":(Math.abs(eP)>p.tolP*3||Math.abs(l.r)>p.tolR*3)?"far":"");
+  const g=guideText(l,p); $("#guide").innerHTML=g.t;
+  const now=performance.now();
+  if(g.ok){ if(!okSince){okSince=now} const held=now-okSince;
+    if(held>600&&!chimed){chimed=true;chime(step===4?2:1)}
+    if(step===4){ hold=Math.min(1,held/3000); $("#holdBar").style.width=(hold*100)+"%";
+      if(hold>=1&&!saved){saved=true;chime(3);
+        (hist[p.id]=hist[p.id]||[]).unshift({t:Date.now(),p:+l.p.toFixed(2),r:+l.r.toFixed(2)}); hist[p.id]=hist[p.id].slice(0,8); persist();
+        $("#result").innerHTML=resultHtml(p);$("#next").textContent="Next: spot check →";} }
+  } else { okSince=0; chimed=false; if(step===4&&!saved){hold=0;$("#holdBar").style.width="0"} }
+}
+function resultHtml(p){
+  const h=(hist[p.id]||[]);
+  return `<div class="card" style="border-color:var(--ok);margin-top:12px"><h2 class="good">Level ✔</h2>
+  <p>Pitch ${h[0].p}°, roll ${f2(h[0].r)}°. Tighten the jam nuts, then <b>recheck</b> (phone placement can shift the reading slightly).</p>
+  <p>Next, do the <b>spot check</b> to see how pitch changes across the playfield.</p>
+  <p class="mut">Carpet and floors settle: recheck after 12–24 h and after any move.</p>
+  <ul class="mut">${h.slice(0,5).map(x=>`<li>${new Date(x.t).toLocaleString()}: pitch ${x.p}°, roll ${f2(x.r)}°</li>`).join("")}</ul></div>`;
+}
+
+/* ---------- events ---------- */
+function sample(ms){return new Promise(res=>{const a=[];const iv=setInterval(()=>a.push({p:sim?sim.p:sm.p,r:sim?sim.r:sm.r}),50);
+  setTimeout(()=>{clearInterval(iv);const n=a.length||1;res({p:a.reduce((s,x)=>s+x.p,0)/n,r:a.reduce((s,x)=>s+x.r,0)/n})},ms)})}
+
+function sampleLive(ms){return new Promise(res=>{const a=[];const iv=setInterval(()=>a.push(live()),50);
+  setTimeout(()=>{clearInterval(iv);const n=a.length||1;res({p:a.reduce((s,x)=>s+x.p,0)/n,r:a.reduce((s,x)=>s+x.r,0)/n})},ms)})}
+
+function spotSummary(p){
+  const got=SPOTS.filter(([k])=>spots[k]);
+  if(got.length<2)return `<p class="mut">Capture at least two spots to compare them.</p>`;
+  const ps=got.map(([k,n])=>({n,v:spots[k].p})), rs=got.map(([k,n])=>({n,v:spots[k].r}));
+  const hi=a=>a.reduce((m,x)=>x.v>m.v?x:m), lo=a=>a.reduce((m,x)=>x.v<m.v?x:m);
+  const sp=hi(ps).v-lo(ps).v, sr=hi(rs).v-lo(rs).v, out=[];
+  out.push(sp<=p.tolP?`<p class="good">✅ Pitch is consistent across spots (range ${sp.toFixed(2)}°).</p>`
+    :`<p class="near">⚠ Pitch varies by ${sp.toFixed(2)}° (highest ${hi(ps).n.toLowerCase()}, lowest ${lo(ps).n.toLowerCase()}). That points to the playfield or cabinet (curve, warp, mounting), not the legs. Keep the legs set from the mid-playfield reading and judge by play.</p>`);
+  out.push(sr<=p.tolR*1.5?`<p class="good">✅ Roll is consistent across spots (range ${sr.toFixed(2)}°).</p>`
+    :`<p class="near">⚠ Roll varies by ${sr.toFixed(2)}° between spots. A twisted or warped playfield or cabinet is likely. Re-check that the phone sits flat on bare wood, not on an insert or plastic.</p>`);
+  const m=spots.mid; if(m&&(Math.abs(m.p-p.pitch)>p.tolP||Math.abs(m.r)>p.tolR))
+    out.push(`<p class="far">Mid-playfield reads off target (pitch ${m.p.toFixed(2)}°, roll ${f2(m.r)}°). Go back to Roll and Pitch and adjust.</p>`);
+  return out.join("");
+}
+
+function viewSpots(){
+  const p=prof();
+  const rows=SPOTS.map(([k,n])=>{const s=spots[k];
+    return `<div class="card" style="margin:8px 0;padding:10px"><div class="row"><div><b>${n}</b><br><span class="mut">${s?`pitch <span class="${cls(s.p-p.pitch,p.tolP)}">${s.p.toFixed(2)}°</span> · roll <span class="${cls(s.r,p.tolR)}">${f2(s.r)}°</span>`:"not captured"}</span></div>
+    <button data-spot="${k}" class="${s?"":"pri"}" style="flex:0 0 auto">${s?"Redo":"Capture"}</button></div></div>`}).join("");
+  const h=(hist[p.id]||[]).filter(x=>x.spots).slice(0,4);
+  return `<div class="card"><h2>6. Spot check</h2>
+  <p class="mut">Move the phone to each spot (same direction, glass still off, flat on bare wood) and tap Capture. Playfields are rarely perfectly flat, so this shows how much the pitch changes across the playfield.</p>
+  <p class="mut">Reference spot for this machine: <b>${esc(p.refSpot||"Mid-playfield (app default)")}</b></p>
+  <div class="read"><div><small>PITCH</small><b id="pv">–</b></div><div><small>ROLL</small><b id="rv">–</b></div></div>
+  ${rows}${spotSummary(p)}
+  ${h.length?`<p class="mut">Past spot checks:</p><ul class="mut">${h.map(x=>`<li>${new Date(x.t).toLocaleDateString()}: ${SPOTS.filter(([k])=>x.spots[k]).map(([k,n])=>n.split(" ").pop()+" "+x.spots[k].p.toFixed(2)+"°/"+f2(x.spots[k].r)+"°").join(", ")}</li>`).join("")}</ul>`:""}
+  <div class="row"><button id="back">Back</button><button class="pri" id="next">Start over</button></div></div>`;
+}
+
+function bind(){
+  const go=n=>{if(n<=2)spots={};step=n;okSince=0;chimed=false;hold=0;saved=false;render()};
+  const nx=$("#next"), bk=$("#back");
+  if(nx)nx.onclick=()=>{ if(step===5)go(2); else if(step===4)go(saved?5:2); else go(step+1) };
+  if(bk)bk.onclick=()=>go(Math.max(0,step-1));
+  const sel=$("#profSel"); if(sel)sel.onchange=()=>{cur=sel.value;persist();render()};
+  const st=$("#startBtn"); if(st)st.onclick=async()=>{await startSensors();go(1)};
+  const ed=$("#editBtn"); if(ed)ed.onclick=()=>{const e=$("#editor");e.innerHTML=e.innerHTML?"":editorHtml();bindEditor()};
+  const nw=$("#newBtn"); if(nw)nw.onclick=()=>{const q={...prof(),id:"u"+Date.now(),name:"New machine",notes:""};P.push(q);cur=q.id;persist();render();$("#editBtn").click()};
+  const dp=$("#dupBtn"); if(dp)dp.onclick=()=>{const q={...prof(),id:"u"+Date.now(),name:prof().name+" (copy)"};P.push(q);cur=q.id;persist();render()};
+  const dl=$("#delBtn"); if(dl)dl.onclick=()=>{if(confirm("Delete this profile?")){P=P.filter(x=>x.id!==cur);cur=P[0].id;persist();render()}};
+  const ca=$("#capA"); if(ca)ca.onclick=async()=>{capturing=true;ca.textContent="Hold still…";calA=await sample(1500);calB=null;capturing=false;render()};
+  const cb=$("#capB"); if(cb)cb.onclick=async()=>{capturing=true;cb.textContent="Hold still…";calB=await sample(1500);capturing=false;
+    off={p:(calA.p+calB.p)/2,r:(calA.r+calB.r)/2};persist();
+    const tilt=Math.max(Math.abs(calA.p-calB.p),Math.abs(calA.r-calB.r))/2;
+    render(); $("#calStat").textContent+=` · offset saved. Surface tilt ≈ ${tilt.toFixed(2)}°`; };
+  const cr=$("#calReset"); if(cr)cr.onclick=()=>{off={p:0,r:0};calA=calB=null;persist();render()};
+  [["oFlip","flip"],["oBeep","beep"],["oSpeak","speak"]].forEach(([id,k])=>{const e=$("#"+id);if(e)e.onchange=()=>{opts[k]=e.checked;persist()}});
+  document.querySelectorAll("[data-spot]").forEach(btn=>btn.onclick=async()=>{
+    btn.textContent="Hold still…";btn.disabled=true;
+    spots[btn.dataset.spot]=await sampleLive(1500);
+    const h=hist[prof().id]; if(h&&h[0]){h[0].spots=JSON.parse(JSON.stringify(spots));persist()}
+    render();});
+  const sp=$("#simP"),sr=$("#simR");
+  if(sp)sp.oninput=()=>{sim.p=+sp.value;$("#sp").textContent=sim.p.toFixed(2)};
+  if(sr)sr.oninput=()=>{sim.r=+sr.value;$("#sr").textContent=sim.r.toFixed(2)};
+}
+function bindEditor(){
+  document.querySelectorAll("#editor [data-f]").forEach(el=>{
+    el.onchange=()=>{const k=el.dataset.f,p=prof();p[k]=el.type==="number"||k==="tpi"?parseFloat(el.value)||0:el.value;persist();
+      if(k==="name"){const o=$("#profSel option[value='"+cur+"']");if(o)o.textContent=p.name}}
+  });
+  document.querySelectorAll("#editor [data-tip]").forEach(el=>{el.onchange=()=>{const p=prof();p.tips=p.tips||{};p.tips[el.dataset.tip]=el.value.split("\n").map(x=>x.trim()).filter(Boolean);persist()}});
+  const mt=$("#manualText"); if(mt)mt.oninput=()=>{
+    const f=findAngles(mt.value);
+    $("#found").innerHTML=f.length?`<p class="mut">Tap a value to use as target pitch:</p>`+f.map((x,i)=>`<span class="chip" data-i="${i}">${x.v}° <span class="mut">…${esc(x.ctx)}…</span></span>`).join(""):`<p class="mut">No angle values found.</p>`;
+    $("#found").querySelectorAll(".chip").forEach(c=>c.onclick=()=>{const p=prof();p.pitch=f[c.dataset.i].v;
+      p.notes=(p.notes?p.notes+" ":"")+"Pitch set from pasted manual text.";persist();render();$("#editBtn").click()});
+  };
+  const ex=$("#expBtn"); if(ex)ex.onclick=()=>{const a=document.createElement("a");
+    a.href=URL.createObjectURL(new Blob([JSON.stringify(P,null,2)],{type:"application/json"}));a.download="pin-leveler-profiles.json";a.click()};
+  const im=$("#impFile"); if(im)im.onchange=async()=>{try{const j=JSON.parse(await im.files[0].text());
+    if(Array.isArray(j)){j.forEach(x=>{if(x&&x.name&&x.pitch){x.id="i"+Date.now()+Math.random().toString(36).slice(2,6);P.push(x)}});persist();render()}}catch(e){alert("Invalid file")}};
+}
+
+/* ---------- boot ---------- */
+(function loop(){ if(step>=1)update(); requestAnimationFrame(loop) })();
+if("serviceWorker" in navigator && location.protocol==="https:"){ /* optional: add sw.js for offline */ }
+// Android Chrome grants sensors without a prompt; start early if allowed.
+if(typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission!=="function"){startSensors()}
+render();
+</script>
+</body>
+</html>
