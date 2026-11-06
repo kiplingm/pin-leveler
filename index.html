@@ -54,9 +54,10 @@ a{color:var(--acc)}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="1.6.0";
+const VERSION="1.7.0";
 const BUILD_DATE="2026-11-06";
 const CHANGELOG=[
+ ["1.7.0","2026-11-06","Sensor test (from Setup): update rate and noise at rest with a suggested settle strictness, beta/gamma sign check, accuracy against a known wedge, and copyable results."],
  ["1.6.0","2026-11-06","Reference spot: pick top, middle or bottom per machine. Roll, Pitch and Verify use it, spot check shows the other spots as offsets from it, and the spread is compared with your last check."],
  ["1.5.0","2026-11-06","Version number in header and footer, What's new list, Check for updates, and an Updated card after an upgrade."],
  ["1.4.0","2026-11-06","Guided spot check: auto-captures when the phone is still, signals with a tone and vibration, then waits for you to move to the next spot (top, middle, bottom). Settle strictness option and per-spot Redo."]
@@ -132,11 +133,12 @@ const persist=()=>{save("pl.profiles",P);save("pl.cur",cur);save("pl.off",off);s
 
 /* ---------- sensors ---------- */
 const D=Math.PI/180;
-let raw={p:0,r:0,has:false}, sm={p:0,r:0,init:false}, sim=null, rawLast={p:0,r:0};
+let raw={p:0,r:0,has:false}, sm={p:0,r:0,init:false}, sim=null, rawLast={p:0,r:0,a:null}, evT=[];
 function onOri(e){
   if(e.beta==null||e.gamma==null)return;
   const wasSim=sim&&sim.auto; raw.has=true;
-  rawLast.p=e.beta; rawLast.r=e.gamma; // unsmoothed, used by settle / spot-check logic
+  rawLast.p=e.beta; rawLast.r=e.gamma; rawLast.a=e.alpha; // unsmoothed, used by settle / spot-check logic
+  const nt=performance.now(); evT.push(nt); while(evT.length&&nt-evT[0]>2000)evT.shift();
   if(wasSim){sim=null;sm.init=false;setTimeout(render,0)}
   // beta: top edge raised => positive (back higher when phone top points to back). gamma: right edge down => positive.
   if(!sm.init){sm.p=e.beta;sm.r=e.gamma;sm.init=true}
@@ -228,10 +230,13 @@ function render(){
   if(sim)h+=`<div class="card sim"><b class="near">⚠ SIMULATED readings: no motion data from this phone.</b> <span class="mut">Open the page over HTTPS in Chrome, allow motion sensors, and reload. These sliders are fake.</span>
    <label>Pitch <span id="sp">${sim.p.toFixed(2)}</span>°<input id="simP" type="range" min="3" max="10" step="0.05" value="${sim.p}"></label>
    <label>Roll <span id="sr">${sim.r.toFixed(2)}</span>°<input id="simR" type="range" min="-3" max="3" step="0.05" value="${sim.r}"></label></div>`;
-  if(step===0) h+=updatedCard()+viewSetup(p);
-  if(step===1) h+=viewCal();
-  if(step===2||step===3||step===4) h+=viewLive();
-  if(step===5) h+=viewSpots();
+  if(tst) h+=viewTest();
+  else{
+    if(step===0) h+=updatedCard()+viewSetup(p);
+    if(step===1) h+=viewCal();
+    if(step===2||step===3||step===4) h+=viewLive();
+    if(step===5) h+=viewSpots();
+  }
   h+=footerHtml();
   $("#app").innerHTML=h; bind(); update();
 }
@@ -285,7 +290,8 @@ function viewSetup(p){
   <li>Remove the glass. Balls out of play, or locked in the trough.</li>
   <li>Loosen leveler jam nuts. Start with all four legs about the same length.</li>
   <li>You'll need a flat, open area of playfield to rest the phone (not on a ramp, insert or plastic).</li></ol>
-  <button class="pri" id="startBtn" style="width:100%">Start (enable motion sensor)</button></div>`;
+  <button class="pri" id="startBtn" style="width:100%">Start (enable motion sensor)</button>
+  <button id="testBtn" style="width:100%;margin-top:8px">Sensor test (check this phone)</button></div>`;
 }
 
 function editorHtml(){
@@ -374,6 +380,7 @@ function guideText(l,p){
 
 function update(){
   const p=prof(), l=live();
+  if(tst){const e=$("#tLive"); if(e)e.innerHTML=raw.has?`beta <b>${rawLast.p.toFixed(2)}°</b> · gamma <b>${rawLast.r.toFixed(2)}°</b> · alpha ${rawLast.a==null?"–":rawLast.a.toFixed(0)+"°"} · <b>${evRate().toFixed(0)} Hz</b>`:"<b class='near'>NO DATA</b>"; return;}
   const d=$("#dbg"); if(d) d.textContent= sim?"Sensor: NO DATA (simulating)":(raw.has?`Sensor: live · raw pitch ${sm.p.toFixed(2)}° roll ${sm.r.toFixed(2)}° · offset ${off.p.toFixed(2)}°/${off.r.toFixed(2)}°`:"Sensor: waiting for data…");
   if(step===1){
     const c=$("#calStat"); if(c&&!capturing&&!calA)c.textContent=`Live: ${sm.p.toFixed(2)}°, ${sm.r.toFixed(2)}°`;
@@ -522,7 +529,83 @@ function viewSpots(){
   <div class="row"><button id="back">Back</button><button class="pri" id="next">Start over</button></div></div>`;
 }
 
+/* ---------- sensor test ---------- */
+// Validates a real phone: event rate + noise, beta/gamma sign convention, accuracy vs a known wedge.
+// All numbers here are UNCALIBRATED raw readings (calibration offset not applied).
+let tst=null; // {busy,noise,flat,top,right,known,wA,wB} while the test screen is open
+const TEST_MS={noise:10000,sign:1500,wedge:3000};
+const evRate=()=>evT.length>1?(evT.length-1)/((evT[evT.length-1]-evT[0])/1000):0;
+const collect=(ms)=>new Promise(res=>{const a=[],iv=setInterval(()=>a.push({p:rawLast.p,r:rawLast.r}),50);setTimeout(()=>{clearInterval(iv);res(a)},ms)});
+const meanOf=(a,k)=>a.reduce((s,x)=>s+x[k],0)/(a.length||1);
+function noiseStats(a){
+  const W=30, rs=[]; // sliding 1.5 s windows (30 samples at 50 ms)
+  for(let i=0;i+W<=a.length;i+=5){const w=a.slice(i,i+W), rg=k=>Math.max(...w.map(x=>x[k]))-Math.min(...w.map(x=>x[k]));rs.push(Math.max(rg("p"),rg("r")))}
+  rs.sort((x,y)=>x-y);
+  const sd=k=>{const m=meanOf(a,k);return Math.sqrt(a.reduce((s,x)=>s+(x[k]-m)**2,0)/(a.length||1))};
+  const p90=rs.length?rs[Math.min(rs.length-1,Math.floor(rs.length*0.9))]:0;
+  // smallest strictness whose threshold leaves 25% headroom over the typical (p90) still-window range
+  const rec=["strict","normal","relaxed"].find(k=>p90<=THR[k]*0.8)||null;
+  return {p90,sdP:sd("p"),sdR:sd("r"),n:a.length,hz:evRate(),rec};
+}
+function signVerdict(d,name){return Math.abs(d)<0.5?`too small to tell (Δ${f2(d)}°, prop it up more)`:d>0?`OK: ${name} increased (Δ${f2(d)}°), matches the app`:`FLIPPED: ${name} decreased (Δ${f2(d)}°), opposite of the app's assumption`}
+function wedgeStats(t){
+  if(!t.wA||!t.wB)return null;
+  const meas=(t.wA.p-t.wB.p)/2, offP=(t.wA.p+t.wB.p)/2, offR=(t.wA.r+t.wB.r)/2, err=meas-t.known;
+  return {meas,offP,offR,err,verdict:Math.abs(err)<=0.1?"good":Math.abs(err)<=0.25?"okay":"poor"};
+}
+function testText(){
+  const t=tst, L=[`Pin Leveler sensor test, v${VERSION} (${BUILD_DATE})`,navigator.userAgent];
+  L.push(`Event rate: ${evRate().toFixed(0)} Hz`);
+  if(t.noise)L.push(`Noise at rest (${TEST_MS.noise/1000} s): worst-case 1.5 s range (p90) ${t.noise.p90.toFixed(3)}°, std dev pitch ${t.noise.sdP.toFixed(3)}° roll ${t.noise.sdR.toFixed(3)}°, suggested strictness: ${t.noise.rec||"none (too noisy)"}`);
+  if(t.flat&&t.top)L.push(`Sign, pitch: ${signVerdict(t.top.p-t.flat.p,"beta")}`);
+  if(t.flat&&t.right)L.push(`Sign, roll: ${signVerdict(t.right.r-t.flat.r,"gamma")}`);
+  const w=wedgeStats(t); if(w)L.push(`Wedge ${t.known}°: measured ${w.meas.toFixed(2)}° (error ${f2(w.err)}°, ${w.verdict}); sensor offset pitch ${f2(w.offP)}° roll ${f2(w.offR)}°`);
+  return L.join("\n");
+}
+function viewTest(){
+  const t=tst, ok=raw.has, dis=(!ok||t.busy)?"disabled":"";
+  const btn=(id,label,c="")=>`<button id="${id}" class="${c}" ${dis}>${t.busy===id?"Hold still…":label}</button>`;
+  const n=t.noise, w=wedgeStats(t);
+  return `<div class="card"><h2>Sensor test</h2>
+  <p class="mut">Checks this phone's sensor. Do it on a hard, flat surface; the readings here are raw (calibration is not applied). Copy the results at the bottom.</p>
+  ${ok?"":`<p class="near"><b>No motion data from this phone.</b> <span class="mut">Open the page over HTTPS in Chrome and allow motion sensors.</span></p>`}
+  <div class="guide" id="tLive" style="min-height:0"></div></div>
+  <div class="card"><h2>1. Noise at rest</h2>
+  <p class="mut">Lay the phone flat and keep it still for ${TEST_MS.noise/1000} s (nobody bumping the machine).</p>${btn("tNoise","Measure noise","pri")}
+  ${n?`<p>Still-window range (p90): <b>${n.p90.toFixed(3)}°</b> · std dev pitch ${n.sdP.toFixed(3)}° roll ${n.sdR.toFixed(3)}° · ${n.hz.toFixed(0)} Hz<br>
+  ${n.rec?`Suggested settle strictness: <b class="good">${n.rec}</b> ${opts.strict===n.rec?`<span class="mut">(already set)</span>`:`<button id="tApply" style="padding:4px 10px">Apply</button>`}`
+    :`<b class="far">Too noisy for the strictest settings.</b> <span class="mut">Use Relaxed, check for vibration, or place the phone on something rigid.</span>`}</p>`:""}</div>
+  <div class="card"><h2>2. Sign check</h2>
+  <p class="mut">Prop each edge up about 2 cm (a book or a few coins), keep it still, and tap the button. The app assumes <b>top edge up → beta rises</b> and <b>right edge down → gamma rises</b>.</p>
+  <div class="row">${btn("tFlat","A. Flat")}${btn("tTop","B. Top edge raised")}${btn("tRight","C. Right edge lowered")}</div>
+  <p class="mut">${t.flat?`Flat: beta ${t.flat.p.toFixed(2)}° gamma ${t.flat.r.toFixed(2)}°`:"Start with A."}</p>
+  ${t.flat&&t.top?`<p>Pitch: ${esc(signVerdict(t.top.p-t.flat.p,"beta"))}</p>`:""}${t.flat&&t.right?`<p>Roll: ${esc(signVerdict(t.right.r-t.flat.r,"gamma"))}</p>`:""}</div>
+  <div class="card"><h2>3. Accuracy vs a known wedge</h2>
+  <p class="mut">Use a wedge or shim of known angle (measure it with a digital level). Put the phone on it with the top toward the <b>high</b> end and tap A, then rotate it 180° in the same spot and tap B. Averaging the two cancels the sensor's own offset.</p>
+  <label>Known angle (°)<input id="tKnown" type="number" step="0.05" value="${t.known}"></label>
+  <div class="row" style="margin-top:8px">${btn("tWA","A. Top toward high end")}${btn("tWB","B. Rotated 180°")}</div>
+  ${w?`<p>Measured <b>${w.meas.toFixed(2)}°</b> vs known ${t.known}° → error <b class="${w.verdict==="good"?"good":w.verdict==="okay"?"near":"far"}">${f2(w.err)}°</b> (${w.verdict}).<br><span class="mut">Sensor offset: pitch ${f2(w.offP)}°, roll ${f2(w.offR)}°. Flip calibration removes it.</span></p>`:""}</div>
+  <div class="card"><h2>Results</h2><textarea id="tOut" rows="7" readonly>${esc(testText())}</textarea>
+  <div class="row" style="margin-top:8px"><button id="tCopy" class="pri">Copy results</button><button id="tClear">Clear</button><button id="tBack">Back</button></div></div>`;
+}
+function bindTest(){
+  const run=(id,ms,fn)=>{const b=$("#"+id); if(b)b.onclick=async()=>{tst.busy=id;render();const a=await collect(ms);tst.busy="";fn(a);save("pl.test",tst);render()}};
+  run("tNoise",TEST_MS.noise,a=>{tst.noise=noiseStats(a)});
+  run("tFlat",TEST_MS.sign,a=>{tst.flat={p:meanOf(a,"p"),r:meanOf(a,"r")}});
+  run("tTop",TEST_MS.sign,a=>{tst.top={p:meanOf(a,"p"),r:meanOf(a,"r")}});
+  run("tRight",TEST_MS.sign,a=>{tst.right={p:meanOf(a,"p"),r:meanOf(a,"r")}});
+  run("tWA",TEST_MS.wedge,a=>{tst.wA={p:meanOf(a,"p"),r:meanOf(a,"r")}});
+  run("tWB",TEST_MS.wedge,a=>{tst.wB={p:meanOf(a,"p"),r:meanOf(a,"r")}});
+  const ap=$("#tApply"); if(ap)ap.onclick=()=>{opts.strict=tst.noise.rec;persist();render()};
+  const kn=$("#tKnown"); if(kn)kn.onchange=()=>{tst.known=parseFloat(kn.value)||0;save("pl.test",tst);render()};
+  const cp=$("#tCopy"); if(cp)cp.onclick=async()=>{const o=$("#tOut");try{await navigator.clipboard.writeText(o.value);cp.textContent="Copied ✔"}catch(e){o.select();cp.textContent="Select + copy manually"}};
+  const cl=$("#tClear"); if(cl)cl.onclick=()=>{tst={busy:"",known:tst.known};save("pl.test",tst);render()};
+  const bk=$("#tBack"); if(bk)bk.onclick=()=>{tst=null;render()};
+}
+
 function bind(){
+  bindTest();
+  const tb=$("#testBtn"); if(tb)tb.onclick=async()=>{await startSensors();tst=Object.assign({busy:"",known:6.5},LS("pl.test")||{},{busy:""});render()};
   const go=n=>{flow.on=false;if(n<=2)spots={};step=n;okSince=0;chimed=false;hold=0;saved=false;render()};
   const nx=$("#next"), bk=$("#back");
   if(nx)nx.onclick=()=>{ if(step===5)go(2); else if(step===4)go(saved?5:2); else go(step+1) };
@@ -577,7 +660,7 @@ function bindEditor(){
   const prev=LS("pl.ver");
   if(prev!==VERSION){ if(prev||hadSaved){showUpd=true;updFrom=prev||"earlier"} save("pl.ver",VERSION); }
 }
-(function loop(){ if(step>=1)update(); requestAnimationFrame(loop) })();
+(function loop(){ if(step>=1||tst)update(); requestAnimationFrame(loop) })();
 if("serviceWorker" in navigator && location.protocol==="https:"){ /* optional: add sw.js for offline */ }
 // Android Chrome grants sensors without a prompt; start early if allowed.
 if(typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission!=="function"){startSensors()}
