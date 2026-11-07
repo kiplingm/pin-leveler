@@ -54,9 +54,10 @@ a{color:var(--acc)}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="1.7.2";
+const VERSION="1.8.0";
 const BUILD_DATE="2026-11-07";
 const CHANGELOG=[
+ ["1.8.0","2026-11-07","Audio cues: rising tone when your adjustment is improving the reading, falling buzz when it is getting worse, a soft tick each second while sensor data is live, and an alarm if it stops. Corrections for backwards directions: reverse pitch sensor, reverse roll sensor, swap clockwise/counterclockwise; the Sensor test can apply the measured signs."],
  ["1.7.2","2026-11-07","Leveling steps name the exact leg's leveler bolt to turn (not the jam nut), with left/right defined from the front of the machine."],
  ["1.7.1","2026-11-07","Leveling steps now say which way to turn the leveler bolt (clockwise raises a corner, counterclockwise lowers it, viewed from above), and Setup explains the jam nut."],
  ["1.7.0","2026-11-06","Sensor test (from Setup): update rate and noise at rest with a suggested settle strictness, beta/gamma sign check, accuracy against a known wedge, and copyable results."],
@@ -124,7 +125,10 @@ let P=LS("pl.profiles")||PRESETS.map((p,i)=>({id:p.key?"k_"+p.key:"p"+i,...p}));
 PRESETS.forEach(p=>{ if(p.key && !P.some(x=>x.key===p.key)) P.push({id:"k_"+p.key,...p}); });
 let cur=LS("pl.cur")||P[0].id;
 let off=LS("pl.off")||{p:0,r:0};
-let opts=Object.assign({flip:false,beep:true,speak:false,strict:"normal"},LS("pl.opts")||{});
+let opts=Object.assign({flip:false,beep:true,speak:false,strict:"normal",trend:true,tick:true,revP:false,revR:false,revTurn:false},LS("pl.opts")||{});
+// revP/revR: reverse a sensor axis. revTurn: swap clockwise/counterclockwise in the instructions (e.g. left-hand threads).
+const sg=k=>opts[k]?-1:1;
+const T=()=>opts.revTurn?{cw:"counterclockwise",ccw:"clockwise"}:{cw:"clockwise",ccw:"counterclockwise"};
 let hist=LS("pl.hist")||{};
 const tipsHtml=(ph,title)=>{const t=(prof().tips||{})[ph];return t&&t.length?`<div class="card" style="border-color:var(--acc)"><h2>${title||"Machine notes"}</h2><ul class="mut">${t.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></div>`:""};
 const prof=()=>P.find(x=>x.id===cur)||P[0];
@@ -135,12 +139,12 @@ const persist=()=>{save("pl.profiles",P);save("pl.cur",cur);save("pl.off",off);s
 
 /* ---------- sensors ---------- */
 const D=Math.PI/180;
-let raw={p:0,r:0,has:false}, sm={p:0,r:0,init:false}, sim=null, rawLast={p:0,r:0,a:null}, evT=[];
+let raw={p:0,r:0,has:false}, sm={p:0,r:0,init:false}, sim=null, rawLast={p:0,r:0,a:null}, evT=[], lastEv=0;
 function onOri(e){
   if(e.beta==null||e.gamma==null)return;
   const wasSim=sim&&sim.auto; raw.has=true;
   rawLast.p=e.beta; rawLast.r=e.gamma; rawLast.a=e.alpha; // unsmoothed, used by settle / spot-check logic
-  const nt=performance.now(); evT.push(nt); while(evT.length&&nt-evT[0]>2000)evT.shift();
+  const nt=performance.now(); lastEv=nt; evT.push(nt); while(evT.length&&nt-evT[0]>2000)evT.shift();
   if(wasSim){sim=null;sm.init=false;setTimeout(render,0)}
   // beta: top edge raised => positive (back higher when phone top points to back). gamma: right edge down => positive.
   if(!sm.init){sm.p=e.beta;sm.r=e.gamma;sm.init=true}
@@ -162,12 +166,12 @@ async function startSensors(){
 const dir=()=>opts.flip?-1:1;
 function live(){
   if(sim) return {p:sim.p*dir(),r:sim.r*dir()};
-  return {p:(sm.p-off.p)*dir(),r:(sm.r-off.r)*dir()};
+  return {p:(sm.p-off.p)*dir()*sg("revP"),r:(sm.r-off.r)*dir()*sg("revR")};
 }
 // calibrated but NOT smoothed
 function liveRaw(){
   if(sim) return {p:sim.p*dir(),r:sim.r*dir()};
-  return {p:(rawLast.p-off.p)*dir(),r:(rawLast.r-off.r)*dir()};
+  return {p:(rawLast.p-off.p)*dir()*sg("revP"),r:(rawLast.r-off.r)*dir()*sg("revR")};
 }
 
 /* ---------- audio ---------- */
@@ -290,11 +294,12 @@ function viewSetup(p){
   <div class="card"><h2>2. Prep the machine</h2><ol>
   <li>Machine in its final spot, on its final floor.</li>
   <li>Remove the glass. Balls out of play, or locked in the trough.</li>
-  <li>Loosen each leveler jam nut (the hex nut against the bottom of the leg): <b>clockwise</b>, looking down at the wrench, to run it down the bolt. Start with all four legs about the same length.</li>
+  <li>Loosen each leveler jam nut (the hex nut against the bottom of the leg): <b>${T().cw}</b>, looking down at the wrench, to run it down the bolt. Start with all four legs about the same length.</li>
   <li>The <b>leveler bolt</b> is the threaded shaft with the foot pad; the <b>jam nut</b> is the separate hex nut above it. The steps tell you which leg's leveler bolt to turn. Left and right are as you stand at the front of the machine.</li>
-  <li>Turning a leveler bolt, looking down at the wrench: <b>clockwise raises</b> that corner (bolt unscrews out of the leg), <b>counterclockwise lowers</b> it (bolt screws into the leg). When done, lock each jam nut <b>counterclockwise</b> up against the leg. This assumes standard right-hand threads.</li>
+  <li>Turning a leveler bolt, looking down at the wrench: <b>${T().cw} raises</b> that corner (bolt unscrews out of the leg), <b>${T().ccw} lowers</b> it (bolt screws into the leg). When done, lock each jam nut <b>${T().ccw}</b> up against the leg. This assumes standard right-hand threads; if yours behave the other way, use "Directions backwards?" below.</li>
   <li>You'll need a flat, open area of playfield to rest the phone (not on a ramp, insert or plastic).</li></ol>
-  <button class="pri" id="startBtn" style="width:100%">Start (enable motion sensor)</button>
+  ${fixHtml()}
+  <button class="pri" id="startBtn" style="width:100%;margin-top:10px">Start (enable motion sensor)</button>
   <button id="testBtn" style="width:100%;margin-top:8px">Sensor test (check this phone)</button></div>`;
 }
 
@@ -357,7 +362,10 @@ function viewLive(){
   <div class="row" style="margin-top:12px"><button id="back">Back</button><button class="pri" id="next">${step===4?"Start over":"Next"}</button></div>
   <div class="row fit" style="margin-top:10px"><label style="margin:0"><input type="checkbox" id="oFlip" ${opts.flip?"checked":""} style="width:auto"> Phone top → FRONT</label>
   <label style="margin:0"><input type="checkbox" id="oBeep" ${opts.beep?"checked":""} style="width:auto"> Beep</label>
-  <label style="margin:0"><input type="checkbox" id="oSpeak" ${opts.speak?"checked":""} style="width:auto"> Voice</label></div></div>`;
+  <label style="margin:0"><input type="checkbox" id="oSpeak" ${opts.speak?"checked":""} style="width:auto"> Voice</label>
+  <label style="margin:0"><input type="checkbox" id="oTrend" ${opts.trend?"checked":""} style="width:auto"> Progress tones</label>
+  <label style="margin:0"><input type="checkbox" id="oTick" ${opts.tick?"checked":""} style="width:auto"> Sensor tick</label></div>
+  <p class="mut" style="font-size:12px;margin-bottom:0">Rising tone = getting closer, falling buzz = getting worse. Tick each second = sensor data is live; a low double beep = it stopped.</p>${fixHtml()}</div>`;
 }
 
 /* ---------- live update ---------- */
@@ -366,13 +374,13 @@ function guideText(l,p){
   if(step===2){
     if(Math.abs(eR)<=p.tolR)return {ok:true,t:`✅ Roll is level (${f2(eR)}°). Tap Next.`};
     const g=turns(eR,p.spanLR,p.tpi), side=eR>0?"RIGHT":"LEFT", other=eR>0?"LEFT":"RIGHT";
-    return {ok:false,t:`${side} side is low by ${Math.abs(eR).toFixed(2)}°.<br>Turn the <b>${side} FRONT leg's leveler bolt clockwise ≈ ${g.txt} turn${g.t>1.1?"s":""}</b> <span class="mut" style="font-weight:400">(looking down at the wrench; this raises that corner)</span><br><span class="mut" style="font-weight:400">or turn the ${other} FRONT leg's leveler bolt counterclockwise by the same (lowers that corner). Left/right as you stand at the front of the machine. Turn the bolt, not the jam nut.</span>`};
+    return {ok:false,t:`${side} side is low by ${Math.abs(eR).toFixed(2)}°.<br>Turn the <b>${side} FRONT leg's leveler bolt ${T().cw} ≈ ${g.txt} turn${g.t>1.1?"s":""}</b> <span class="mut" style="font-weight:400">(looking down at the wrench; this raises that corner)</span><br><span class="mut" style="font-weight:400">or turn the ${other} FRONT leg's leveler bolt ${T().ccw} by the same (lowers that corner). Left/right as you stand at the front of the machine. Turn the bolt, not the jam nut.</span>`};
   }
   if(step===3){
     if(Math.abs(eP)<=p.tolP)return {ok:true,t:`✅ Pitch is on target (${l.p.toFixed(2)}°). Tap Next.`};
     const g=turns(eP,p.spanFB,p.tpi);
-    if(eP<0)return {ok:false,t:`Needs ${Math.abs(eP).toFixed(2)}° more pitch.<br>Turn the <b>leveler bolts on BOTH REAR legs (left rear and right rear) clockwise ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b> <span class="mut" style="font-weight:400">(looking down at the wrench; this raises the rear)</span><br><span class="mut" style="font-weight:400">or turn the leveler bolts on BOTH FRONT legs counterclockwise by the same (lowers the front). Turn the bolts, not the jam nuts.</span>`};
-    return {ok:false,t:`${eP.toFixed(2)}° too steep.<br>Turn the <b>leveler bolts on BOTH REAR legs (left rear and right rear) counterclockwise ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b> <span class="mut" style="font-weight:400">(looking down at the wrench; this lowers the rear)</span><br><span class="mut" style="font-weight:400">or turn the leveler bolts on BOTH FRONT legs clockwise by the same (raises the front). Turn the bolts, not the jam nuts.</span>`};
+    if(eP<0)return {ok:false,t:`Needs ${Math.abs(eP).toFixed(2)}° more pitch.<br>Turn the <b>leveler bolts on BOTH REAR legs (left rear and right rear) ${T().cw} ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b> <span class="mut" style="font-weight:400">(looking down at the wrench; this raises the rear)</span><br><span class="mut" style="font-weight:400">or turn the leveler bolts on BOTH FRONT legs ${T().ccw} by the same (lowers the front). Turn the bolts, not the jam nuts.</span>`};
+    return {ok:false,t:`${eP.toFixed(2)}° too steep.<br>Turn the <b>leveler bolts on BOTH REAR legs (left rear and right rear) ${T().ccw} ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b> <span class="mut" style="font-weight:400">(looking down at the wrench; this lowers the rear)</span><br><span class="mut" style="font-weight:400">or turn the leveler bolts on BOTH FRONT legs ${T().cw} by the same (raises the front). Turn the bolts, not the jam nuts.</span>`};
   }
   const okP=Math.abs(eP)<=p.tolP, okR=Math.abs(eR)<=p.tolR;
   if(okP&&okR)return {ok:true,t:`✅ In tolerance. Hold still…`};
@@ -490,6 +498,53 @@ function flowBox(){
 }
 setInterval(flowTick,50);
 
+/* ---------- sound cues: progress + sensor heartbeat ---------- */
+function getAC(){try{AC=AC||new (window.AudioContext||window.webkitAudioContext)();if(AC.state==="suspended")AC.resume()}catch(e){}return AC}
+function blip(freqs,o){
+  o=o||{}; const type=o.type||"sine",gain=o.gain||0.15,dur=o.dur||0.09,gap=o.gap||0.1;
+  if(!opts.beep)return; const a=getAC(); if(!a||a.state!=="running")return;
+  try{freqs.forEach((f,i)=>{const osc=a.createOscillator(),g=a.createGain(),t=a.currentTime+i*gap;
+    osc.type=type;osc.frequency.value=f;g.gain.setValueAtTime(gain,t);g.gain.exponentialRampToValueAtTime(0.001,t+dur);
+    osc.connect(g);g.connect(a.destination);osc.start(t);osc.stop(t+dur+0.01)})}catch(e){}
+}
+// Improving / worsening: compare the error now with the error TREND_MS ago, on the Roll and Pitch steps.
+// Rising two-note = closer to target, falling buzz = further away. Silent while holding on target or standing still.
+const TREND_MS=1200, TREND_DEG=0.03;
+let trendHist=[];
+function trendTick(){
+  if(!opts.trend||tst||(step!==2&&step!==3)||(!raw.has&&!sim)){trendHist=[];return}
+  const p=prof(), l=live(), now=performance.now();
+  const m=step===2?Math.abs(l.r):Math.abs(l.p-p.pitch), tol=step===2?p.tolR:p.tolP;
+  trendHist.push({t:now,m});
+  while(trendHist.length&&now-trendHist[0].t>TREND_MS+300)trendHist.shift();
+  const old=trendHist[0]; if(!old||now-old.t<TREND_MS)return;
+  const d=old.m-m;
+  const rec=trendHist.find(x=>now-x.t<=450);
+  if(rec&&Math.abs(rec.m-m)<0.008)return; // not moving right now: no late cue after you stop turning
+  if(m<=tol&&old.m<=tol)return; // staying on target: the on-target chime covers it
+  if(d>TREND_DEG){blip([520,780],{gain:0.16});trendHist=[]}
+  else if(d<-TREND_DEG){blip([300,200],{type:"sawtooth",gain:0.1,dur:0.14,gap:0.12});trendHist=[]}
+}
+// Heartbeat: soft tick each second while sensor events are arriving; low double beep if they stop; chime when they resume.
+let wasStalled=false;
+function sensorBeat(){
+  if(!sensing||(step<1&&!tst)||!opts.tick||!raw.has)return;
+  const ok=performance.now()-lastEv<1500;
+  if(ok){ if(wasStalled){wasStalled=false;blip([600,900],{gain:0.12})} else blip([1500],{gain:0.05,dur:0.03}) }
+  else { wasStalled=true; blip([220,180],{type:"square",gain:0.07,dur:0.14,gap:0.17}) }
+}
+setInterval(trendTick,150); setInterval(sensorBeat,1000);
+document.addEventListener("pointerdown",getAC,{passive:true}); // browsers only allow sound after a tap
+
+/* ---------- "directions backwards?" corrections ---------- */
+let fixOpen=false;
+function fixHtml(){
+  const cb=(id,k,t)=>`<label style="margin:6px 0 0"><input type="checkbox" id="${id}" ${opts[k]?"checked":""} style="width:auto"> ${t}</label>`;
+  return `<details id="fixBox" ${fixOpen?"open":""} style="margin-top:10px"><summary class="mut">Directions backwards? Corrections</summary>
+  <p class="mut">Run the Sensor test (on the Setup screen) to find out which one is wrong. The pitch and roll switches fix a phone whose readings move the wrong way when you tilt it. The last one fixes instructions that give the right leg but the wrong clockwise / counterclockwise.</p>
+  ${cb("oRevP","revP","Reverse pitch sensor (top edge up should read higher)")}${cb("oRevR","revR","Reverse roll sensor (right edge down should read higher)")}${cb("oRev","revTurn","Swap clockwise / counterclockwise in the instructions")}</details>`;
+}
+
 function spotSummary(p){
   const got=SPOTS.filter(([k])=>spots[k]);
   if(got.length<2)return `<p class="mut">Capture at least two spots to compare them.</p>`;
@@ -552,6 +607,13 @@ function noiseStats(a){
   return {p90,sdP:sd("p"),sdR:sd("r"),n:a.length,hz:evRate(),rec};
 }
 function signVerdict(d,name){return Math.abs(d)<0.5?`too small to tell (Δ${f2(d)}°, prop it up more)`:d>0?`OK: ${name} increased (Δ${f2(d)}°), matches the app`:`FLIPPED: ${name} decreased (Δ${f2(d)}°), opposite of the app's assumption`}
+// From the raw (unsigned) sign check: which axes need reversing. null until at least one axis is measured clearly.
+function signFix(t){
+  const dP=t.flat&&t.top?t.top.p-t.flat.p:0, dR=t.flat&&t.right?t.right.r-t.flat.r:0;
+  const okP=Math.abs(dP)>=0.5, okR=Math.abs(dR)>=0.5; if(!okP&&!okR)return null;
+  const revP=okP?dP<0:opts.revP, revR=okR?dR<0:opts.revR;
+  return {revP,revR,text:`Pitch will be ${revP?"reversed":"normal"}, roll ${revR?"reversed":"normal"}.`};
+}
 function wedgeStats(t){
   if(!t.wA||!t.wB)return null;
   const meas=(t.wA.p-t.wB.p)/2, offP=(t.wA.p+t.wB.p)/2, offR=(t.wA.r+t.wB.r)/2, err=meas-t.known;
@@ -583,7 +645,8 @@ function viewTest(){
   <p class="mut">Prop each edge up about 2 cm (a book or a few coins), keep it still, and tap the button. The app assumes <b>top edge up → beta rises</b> and <b>right edge down → gamma rises</b>.</p>
   <div class="row">${btn("tFlat","A. Flat")}${btn("tTop","B. Top edge raised")}${btn("tRight","C. Right edge lowered")}</div>
   <p class="mut">${t.flat?`Flat: beta ${t.flat.p.toFixed(2)}° gamma ${t.flat.r.toFixed(2)}°`:"Start with A."}</p>
-  ${t.flat&&t.top?`<p>Pitch: ${esc(signVerdict(t.top.p-t.flat.p,"beta"))}</p>`:""}${t.flat&&t.right?`<p>Roll: ${esc(signVerdict(t.right.r-t.flat.r,"gamma"))}</p>`:""}</div>
+  ${t.flat&&t.top?`<p>Pitch: ${esc(signVerdict(t.top.p-t.flat.p,"beta"))}</p>`:""}${t.flat&&t.right?`<p>Roll: ${esc(signVerdict(t.right.r-t.flat.r,"gamma"))}</p>`:""}
+  ${signFix(t)?`<button id="tSignApply" class="pri">Apply measured signs</button> <span class="mut">${signFix(t).text}</span>`:""}${fixHtml()}</div>
   <div class="card"><h2>3. Accuracy vs a known wedge</h2>
   <p class="mut">Use a wedge or shim of known angle (measure it with a digital level). Put the phone on it with the top toward the <b>high</b> end and tap A, then rotate it 180° in the same spot and tap B. Averaging the two cancels the sensor's own offset.</p>
   <label>Known angle (°)<input id="tKnown" type="number" step="0.05" value="${t.known}"></label>
@@ -600,6 +663,7 @@ function bindTest(){
   run("tRight",TEST_MS.sign,a=>{tst.right={p:meanOf(a,"p"),r:meanOf(a,"r")}});
   run("tWA",TEST_MS.wedge,a=>{tst.wA={p:meanOf(a,"p"),r:meanOf(a,"r")}});
   run("tWB",TEST_MS.wedge,a=>{tst.wB={p:meanOf(a,"p"),r:meanOf(a,"r")}});
+  const sa=$("#tSignApply"); if(sa)sa.onclick=()=>{const f=signFix(tst);opts.revP=f.revP;opts.revR=f.revR;persist();render()};
   const ap=$("#tApply"); if(ap)ap.onclick=()=>{opts.strict=tst.noise.rec;persist();render()};
   const kn=$("#tKnown"); if(kn)kn.onchange=()=>{tst.known=parseFloat(kn.value)||0;save("pl.test",tst);render()};
   const cp=$("#tCopy"); if(cp)cp.onclick=async()=>{const o=$("#tOut");try{await navigator.clipboard.writeText(o.value);cp.textContent="Copied ✔"}catch(e){o.select();cp.textContent="Select + copy manually"}};
@@ -626,7 +690,9 @@ function bind(){
     const tilt=Math.max(Math.abs(calA.p-calB.p),Math.abs(calA.r-calB.r))/2;
     render(); $("#calStat").textContent+=` · offset saved. Surface tilt ≈ ${tilt.toFixed(2)}°`; };
   const cr=$("#calReset"); if(cr)cr.onclick=()=>{off={p:0,r:0};calA=calB=null;persist();render()};
-  [["oFlip","flip"],["oBeep","beep"],["oSpeak","speak"]].forEach(([id,k])=>{const e=$("#"+id);if(e)e.onchange=()=>{opts[k]=e.checked;persist()}});
+  [["oFlip","flip"],["oBeep","beep"],["oSpeak","speak"],["oTrend","trend"],["oTick","tick"],["oRevP","revP"],["oRevR","revR"],["oRev","revTurn"]].forEach(([id,k])=>{const e=$("#"+id);
+    if(e)e.onchange=()=>{opts[k]=e.checked;persist();if(/^rev/.test(k))render()}});
+  const fb=$("#fixBox"); if(fb)fb.ontoggle=()=>{fixOpen=fb.open};
   document.querySelectorAll("[data-spot]").forEach(btn=>btn.onclick=()=>flowStart(SPOTS.findIndex(s=>s[0]===btn.dataset.spot)));
   const fs=$("#flowStart"); if(fs)fs.onclick=()=>flowStart();
   const fn=$("#flowNow"); if(fn)fn.onclick=()=>{const m=recentMean(QUIET_MS);flowCapture(m.p,m.r)};
