@@ -54,9 +54,10 @@ a{color:var(--acc)}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="1.7.0";
-const BUILD_DATE="2026-11-06";
+const VERSION="1.7.1";
+const BUILD_DATE="2026-11-07";
 const CHANGELOG=[
+ ["1.7.1","2026-11-07","Leveling steps now say which way to turn the leveler bolt (clockwise raises a corner, counterclockwise lowers it, viewed from above), and Setup explains the jam nut."],
  ["1.7.0","2026-11-06","Sensor test (from Setup): update rate and noise at rest with a suggested settle strictness, beta/gamma sign check, accuracy against a known wedge, and copyable results."],
  ["1.6.0","2026-11-06","Reference spot: pick top, middle or bottom per machine. Roll, Pitch and Verify use it, spot check shows the other spots as offsets from it, and the spread is compared with your last check."],
  ["1.5.0","2026-11-06","Version number in header and footer, What's new list, Check for updates, and an Updated card after an upgrade."],
@@ -288,7 +289,8 @@ function viewSetup(p){
   <div class="card"><h2>2. Prep the machine</h2><ol>
   <li>Machine in its final spot, on its final floor.</li>
   <li>Remove the glass. Balls out of play, or locked in the trough.</li>
-  <li>Loosen leveler jam nuts. Start with all four legs about the same length.</li>
+  <li>Loosen each leveler jam nut (the hex nut against the bottom of the leg): <b>clockwise</b>, looking down at the wrench, to run it down the bolt. Start with all four legs about the same length.</li>
+  <li>Turning a leveler bolt, looking down at the wrench: <b>clockwise raises</b> that corner (bolt unscrews out of the leg), <b>counterclockwise lowers</b> it (bolt screws into the leg). When done, lock each jam nut <b>counterclockwise</b> up against the leg. This assumes standard right-hand threads.</li>
   <li>You'll need a flat, open area of playfield to rest the phone (not on a ramp, insert or plastic).</li></ol>
   <button class="pri" id="startBtn" style="width:100%">Start (enable motion sensor)</button>
   <button id="testBtn" style="width:100%;margin-top:8px">Sensor test (check this phone)</button></div>`;
@@ -362,13 +364,13 @@ function guideText(l,p){
   if(step===2){
     if(Math.abs(eR)<=p.tolR)return {ok:true,t:`✅ Roll is level (${f2(eR)}°). Tap Next.`};
     const g=turns(eR,p.spanLR,p.tpi), side=eR>0?"RIGHT":"LEFT", other=eR>0?"LEFT":"RIGHT";
-    return {ok:false,t:`${side} side is low by ${Math.abs(eR).toFixed(2)}°.<br>Extend the <b>${side} front leg ≈ ${g.txt} turn${g.t>1.1?"s":""}</b><br><span class="mut" style="font-weight:400">or retract the ${other} front leg by the same.</span>`};
+    return {ok:false,t:`${side} side is low by ${Math.abs(eR).toFixed(2)}°.<br>Extend the <b>${side} front leg ≈ ${g.txt} turn${g.t>1.1?"s":""}</b> <span class="mut" style="font-weight:400">(bolt clockwise, viewed from above)</span><br><span class="mut" style="font-weight:400">or retract the ${other} front leg by the same (bolt counterclockwise).</span>`};
   }
   if(step===3){
     if(Math.abs(eP)<=p.tolP)return {ok:true,t:`✅ Pitch is on target (${l.p.toFixed(2)}°). Tap Next.`};
     const g=turns(eP,p.spanFB,p.tpi);
-    if(eP<0)return {ok:false,t:`Needs ${Math.abs(eP).toFixed(2)}° more pitch.<br>Extend <b>both rear legs ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b><br><span class="mut" style="font-weight:400">or retract both front legs.</span>`};
-    return {ok:false,t:`${eP.toFixed(2)}° too steep.<br>Retract <b>both rear legs ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b><br><span class="mut" style="font-weight:400">or extend both front legs.</span>`};
+    if(eP<0)return {ok:false,t:`Needs ${Math.abs(eP).toFixed(2)}° more pitch.<br>Extend <b>both rear legs ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b> <span class="mut" style="font-weight:400">(bolts clockwise, viewed from above)</span><br><span class="mut" style="font-weight:400">or retract both front legs (bolts counterclockwise).</span>`};
+    return {ok:false,t:`${eP.toFixed(2)}° too steep.<br>Retract <b>both rear legs ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b> <span class="mut" style="font-weight:400">(bolts counterclockwise, viewed from above)</span><br><span class="mut" style="font-weight:400">or extend both front legs (bolts clockwise).</span>`};
   }
   const okP=Math.abs(eP)<=p.tolP, okR=Math.abs(eR)<=p.tolR;
   if(okP&&okR)return {ok:true,t:`✅ In tolerance. Hold still…`};
