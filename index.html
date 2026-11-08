@@ -44,6 +44,8 @@ ol,ul{padding-left:20px;margin:6px 0}li{margin:3px 0}
 .sim{border:1px dashed var(--warn)}
 a{color:var(--acc)}
 .tag{font-size:12px;color:var(--warn)}
+.leg{border:1px solid var(--line);border-radius:12px;padding:8px;text-align:center;background:#0b0f14}
+.leg.lk{border-color:var(--bad)}.leg button{margin:4px 2px 0;padding:6px 8px;font-size:13px}
 </style>
 </head>
 <body>
@@ -54,9 +56,10 @@ a{color:var(--acc)}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="1.8.0";
-const BUILD_DATE="2026-11-07";
+const VERSION="1.9.0";
+const BUILD_DATE="2026-11-08";
 const CHANGELOG=[
+ ["1.9.0","2026-11-08","Legs that can't be adjusted: mark any leg as locked (stripped or seized leveler) and Roll/Pitch move only the other legs, keeping all four feet in plane so the cabinet doesn't rock. Setup says which axes are still adjustable. A Test button checks whether a leg actually responds. New Adjust setting: both, pitch only, or roll only."],
  ["1.8.0","2026-11-07","Audio cues: rising tone when your adjustment is improving the reading, falling buzz when it is getting worse, a soft tick each second while sensor data is live, and an alarm if it stops. Corrections for backwards directions: reverse pitch sensor, reverse roll sensor, swap clockwise/counterclockwise; the Sensor test can apply the measured signs."],
  ["1.7.2","2026-11-07","Leveling steps name the exact leg's leveler bolt to turn (not the jam nut), with left/right defined from the front of the machine."],
  ["1.7.1","2026-11-07","Leveling steps now say which way to turn the leveler bolt (clockwise raises a corner, counterclockwise lowers it, viewed from above), and Setup explains the jam nut."],
@@ -237,6 +240,7 @@ function render(){
    <label>Pitch <span id="sp">${sim.p.toFixed(2)}</span>°<input id="simP" type="range" min="3" max="10" step="0.05" value="${sim.p}"></label>
    <label>Roll <span id="sr">${sim.r.toFixed(2)}</span>°<input id="simR" type="range" min="-3" max="3" step="0.05" value="${sim.r}"></label></div>`;
   if(tst) h+=viewTest();
+  else if(legT) h+=viewLegTest();
   else{
     if(step===0) h+=updatedCard()+viewSetup(p);
     if(step===1) h+=viewCal();
@@ -291,10 +295,11 @@ function viewSetup(p){
   <div class="row fit"><button id="editBtn">Edit / docs</button><button id="newBtn">New</button><button id="dupBtn">Duplicate</button>${P.length>1?`<button id="delBtn">Delete</button>`:""}</div></div>
   ${tipsHtml("setup","Notes for this machine")}
   <div id="editor"></div>
+  ${legsCard(p)}
   <div class="card"><h2>2. Prep the machine</h2><ol>
   <li>Machine in its final spot, on its final floor.</li>
   <li>Remove the glass. Balls out of play, or locked in the trough.</li>
-  <li>Loosen each leveler jam nut (the hex nut against the bottom of the leg): <b>${T().cw}</b>, looking down at the wrench, to run it down the bolt. Start with all four legs about the same length.</li>
+  <li>Loosen each leveler jam nut (the hex nut against the bottom of the leg): <b>${T().cw}</b>, looking down at the wrench, to run it down the bolt. Start with all four legs about the same length (leave any leg marked "can't adjust" alone).</li>
   <li>The <b>leveler bolt</b> is the threaded shaft with the foot pad; the <b>jam nut</b> is the separate hex nut above it. The steps tell you which leg's leveler bolt to turn. Left and right are as you stand at the front of the machine.</li>
   <li>Turning a leveler bolt, looking down at the wrench: <b>${T().cw} raises</b> that corner (bolt unscrews out of the leg), <b>${T().ccw} lowers</b> it (bolt screws into the leg). When done, lock each jam nut <b>${T().ccw}</b> up against the leg. This assumes standard right-hand threads; if yours behave the other way, use "Directions backwards?" below.</li>
   <li>You'll need a flat, open area of playfield to rest the phone (not on a ramp, insert or plastic).</li></ol>
@@ -349,11 +354,11 @@ function viewCal(){
 
 function viewLive(){
   const where=`<p class="mut">Measure at the <b>reference spot: ${refName(prof())}</b>.${prof().refSpot&&refKey(prof())!=="mid"?" "+esc(prof().refSpot):""}</p>`;
-  const intro=step===2?`<h2>3. Side-to-side (roll)</h2><p class="mut">Lay the phone flat on the playfield, <b>top of the phone toward the backbox</b>. We'll fix roll with the <b>front legs</b>.</p>${where}`
-   :step===3?`<h2>4. Front-to-back (pitch)</h2><p class="mut">Same phone position. We'll set pitch by moving the <b>rear legs together</b>, so roll stays put.</p>${where}`
-   :`<h2>5. Verify</h2><p class="mut">Hold both in tolerance for 3 seconds.</p>${where}`;
+  const intro=step===2?`<h2>3. Side-to-side (roll)</h2><p class="mut">Lay the phone flat on the playfield, <b>top of the phone toward the backbox</b>. We'll fix roll with ${lockedOf(prof()).length?"the <b>unlocked legs</b> (a locked leg is left alone)":"the <b>front legs</b>"}.</p>${where}`
+   :step===3?`<h2>4. Front-to-back (pitch)</h2><p class="mut">Same phone position. We'll set pitch by moving ${lockedOf(prof()).length?"the <b>unlocked legs</b> (a locked leg is left alone)":"the <b>rear legs together</b>"}, so roll stays put.</p>${where}`
+   :`<h2>5. Verify</h2><p class="mut">Hold ${axesOf(prof())==="both"?"both":"the "+axesOf(prof())} in tolerance for 3 seconds.${axesOf(prof())==="both"?"":" The other axis is not being adjusted."}</p>${where}`;
   return tipsHtml(["roll","pitch","verify"][step-2])+`<div class="card">${intro}
-  <div class="read"><div><small>PITCH (target ${prof().pitch}°)</small><b id="pv">–</b></div><div><small>ROLL (0° target)</small><b id="rv">–</b></div></div>
+  <div class="read"><div><small>PITCH (target ${prof().pitch}°)${useP(prof())?"":" · not adjusted"}</small><b id="pv">–</b></div><div><small>ROLL (0° target)${useR(prof())?"":" · not adjusted"}</small><b id="rv">–</b></div></div>
   <div class="bubble"><div class="t"></div><div class="d" id="dot"></div></div>
   <p class="mut" style="text-align:center;margin-top:-4px">Dot = where a ball would drift</p>
   <div class="guide" id="guide"></div>
@@ -373,20 +378,22 @@ function guideText(l,p){
   const eP=l.p-p.pitch, eR=l.r;
   if(step===2){
     if(Math.abs(eR)<=p.tolR)return {ok:true,t:`✅ Roll is level (${f2(eR)}°). Tap Next.`};
+    if(lockedOf(p).length)return lockedGuide(l,p);
     const g=turns(eR,p.spanLR,p.tpi), side=eR>0?"RIGHT":"LEFT", other=eR>0?"LEFT":"RIGHT";
     return {ok:false,t:`${side} side is low by ${Math.abs(eR).toFixed(2)}°.<br>Turn the <b>${side} FRONT leg's leveler bolt ${T().cw} ≈ ${g.txt} turn${g.t>1.1?"s":""}</b> <span class="mut" style="font-weight:400">(looking down at the wrench; this raises that corner)</span><br><span class="mut" style="font-weight:400">or turn the ${other} FRONT leg's leveler bolt ${T().ccw} by the same (lowers that corner). Left/right as you stand at the front of the machine. Turn the bolt, not the jam nut.</span>`};
   }
   if(step===3){
     if(Math.abs(eP)<=p.tolP)return {ok:true,t:`✅ Pitch is on target (${l.p.toFixed(2)}°). Tap Next.`};
+    if(lockedOf(p).length)return lockedGuide(l,p);
     const g=turns(eP,p.spanFB,p.tpi);
     if(eP<0)return {ok:false,t:`Needs ${Math.abs(eP).toFixed(2)}° more pitch.<br>Turn the <b>leveler bolts on BOTH REAR legs (left rear and right rear) ${T().cw} ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b> <span class="mut" style="font-weight:400">(looking down at the wrench; this raises the rear)</span><br><span class="mut" style="font-weight:400">or turn the leveler bolts on BOTH FRONT legs ${T().ccw} by the same (lowers the front). Turn the bolts, not the jam nuts.</span>`};
     return {ok:false,t:`${eP.toFixed(2)}° too steep.<br>Turn the <b>leveler bolts on BOTH REAR legs (left rear and right rear) ${T().ccw} ≈ ${g.txt} turn${g.t>1.1?"s":""} each</b> <span class="mut" style="font-weight:400">(looking down at the wrench; this lowers the rear)</span><br><span class="mut" style="font-weight:400">or turn the leveler bolts on BOTH FRONT legs ${T().cw} by the same (raises the front). Turn the bolts, not the jam nuts.</span>`};
   }
-  const okP=Math.abs(eP)<=p.tolP, okR=Math.abs(eR)<=p.tolR;
+  const okP=!useP(p)||Math.abs(eP)<=p.tolP, okR=!useR(p)||Math.abs(eR)<=p.tolR; // an axis you're not adjusting doesn't count
   if(okP&&okR)return {ok:true,t:`✅ In tolerance. Hold still…`};
   const bits=[];
-  if(!okR)bits.push(`Roll off by ${f2(eR)}° (${eR>0?"right":"left"} low): go back and fix with the front legs.`);
-  if(!okP)bits.push(`Pitch off by ${f2(eP)}°: go back and adjust the rear legs.`);
+  if(!okR)bits.push(`Roll off by ${f2(eR)}° (${eR>0?"right":"left"} low): go back to the Roll step.`);
+  if(!okP)bits.push(`Pitch off by ${f2(eP)}°: go back to the Pitch step.`);
   return {ok:false,t:bits.join("<br>")};
 }
 
@@ -411,7 +418,8 @@ function update(){
   const dot=$("#dot"), sc=45; // px per degree
   const dx=Math.max(-90,Math.min(90,l.r*sc)), dy=Math.max(-90,Math.min(90,eP*sc));
   dot.style.transform=`translate(${dx}px,${dy}px)`;
-  dot.className="d "+(Math.abs(eP)<=p.tolP&&Math.abs(l.r)<=p.tolR?"good":(Math.abs(eP)>p.tolP*3||Math.abs(l.r)>p.tolR*3)?"far":"");
+  const gP=!useP(p)||Math.abs(eP)<=p.tolP, gR=!useR(p)||Math.abs(l.r)<=p.tolR, fP=useP(p)&&Math.abs(eP)>p.tolP*3, fR=useR(p)&&Math.abs(l.r)>p.tolR*3;
+  dot.className="d "+(gP&&gR?"good":(fP||fR)?"far":"");
   const g=guideText(l,p); $("#guide").innerHTML=g.t;
   const now=performance.now();
   if(g.ok){ if(!okSince){okSince=now} const held=now-okSince;
@@ -588,6 +596,138 @@ function viewSpots(){
   <div class="row"><button id="back">Back</button><button class="pri" id="next">Start over</button></div></div>`;
 }
 
+/* ---------- legs & axes ---------- */
+// A leg that can't be adjusted (stripped, seized) is "locked". The plan moves only the other legs and keeps the four feet
+// in one plane (no twist), so the cabinet doesn't start to rock. Left/right are as you stand at the front.
+// Model: each leg's height change d = u*[1,1,1,1] + (hP/2)*BP + (hR/2)*BR, where hP = rear avg - front avg and
+// hR = left avg - right avg are the height changes wanted, and u is a free uniform shift chosen so locked legs get 0.
+const LEGS=["FL","FR","RL","RR"];
+const LEGN={FL:"LEFT FRONT",FR:"RIGHT FRONT",RL:"LEFT REAR",RR:"RIGHT REAR"};
+const BP={FL:-1,FR:-1,RL:1,RR:1}, BR={FL:1,FR:-1,RL:1,RR:-1}; // pitch pattern (rear up) and roll pattern (left up = right low)
+const lockedOf=p=>LEGS.filter(k=>(p.locked||[]).includes(k));
+const axesOf=p=>p.axes==="pitch"||p.axes==="roll"?p.axes:"both";
+const useP=p=>axesOf(p)!=="roll", useR=p=>axesOf(p)!=="pitch";
+const skipStep=(n,p)=>(n===2&&!useR(p))||(n===3&&!useP(p)); // pitch-only skips Roll, roll-only skips Pitch
+const stepAfter=s=>{let n=s+1;while(n<5&&skipStep(n,prof()))n++;return n};
+const stepBefore=s=>{let n=s-1;while(n>1&&skipStep(n,prof()))n--;return n};
+function turnsIn(inches,tpi){const t=inches*tpi, e=Math.max(1,Math.round(t*8)), w=Math.floor(e/8), f=e%8; return {txt:(w?w:"")+FR[f]||"⅛", t}}
+
+// planLegs: leg height changes (inches, + = extend/raise) for wanted hP, hR. If the locked legs make that impossible,
+// (aP,aR) is the closest achievable combination (projection onto what the locked legs allow).
+function planLegs(p,hP,hR){
+  const L=lockedOf(p); let aP=hP, aR=hR;
+  if(L.length>=2){
+    const i0=L[0], rows=L.slice(1).map(i=>[BP[i]-BP[i0],BR[i]-BR[i0]]).filter(v=>v[0]||v[1]);
+    if(rows.length){
+      const n=rows[0], parallel=rows.every(v=>v[0]*n[1]-v[1]*n[0]===0);
+      if(!parallel){aP=0;aR=0}
+      else{const k=(aP*n[0]+aR*n[1])/(n[0]*n[0]+n[1]*n[1]); aP-=k*n[0]; aR-=k*n[1]}
+    }
+  }
+  const u=L.length?-(aP/2)*BP[L[0]]-(aR/2)*BR[L[0]]:0, d={};
+  LEGS.forEach(k=>{d[k]=u+aP/2*BP[k]+aR/2*BR[k]});
+  return {d,aP,aR};
+}
+function legSummary(p){
+  const L=lockedOf(p); if(!L.length)return "All four legs are adjustable: roll uses the front legs and pitch uses the rear legs.";
+  const names=L.map(k=>LEGN[k].toLowerCase()).join(" and ")+(L.length>1?" legs are":" leg is");
+  const a=planLegs(p,1,0), b=planLegs(p,0,1), near=(x,y)=>Math.abs(x-y)<1e-6;
+  const pOK=near(a.aP,1)&&near(a.aR,0), rOK=near(b.aR,1)&&near(b.aP,0);
+  if(pOK&&rOK)return `With the ${names} locked, roll and pitch can both still be adjusted by moving the other legs.`;
+  if(pOK)return `With the ${names} locked, only PITCH can be adjusted. Roll cannot be changed independently.`;
+  if(rOK)return `With the ${names} locked, only ROLL can be adjusted. Pitch cannot be changed independently.`;
+  const mix=[[1,1],[1,-1]].some(([x,y])=>{const r=planLegs(p,x,y);return Math.abs(r.aP)+Math.abs(r.aR)>1e-9});
+  return mix?`With the ${names} locked, roll and pitch can't be adjusted independently, only a linked mix of the two. Free a leg if you can.`
+            :`With the ${names} locked, nothing can be adjusted. Free a leg (or replace its leveler) first.`;
+}
+function legsCard(p){
+  const L=lockedOf(p), ax=axesOf(p);
+  const tile=k=>`<div class="leg ${L.includes(k)?"lk":""}"><b>${L.includes(k)?"🔒 ":""}${LEGN[k]}</b><br><button data-leg="${k}">${L.includes(k)?"Unlock":"Can't adjust"}</button><button data-legtest="${k}">Test</button></div>`;
+  return `<div class="card"><h2>Legs & what to adjust</h2>
+  <p class="mut">Mark any leg whose leveler bolt can't be turned (stripped, seized, or bottomed out). The steps then move only the other legs around it. Not sure whether a leg works? Tap <b>Test</b>.</p>
+  <p class="mut" style="text-align:center;margin:4px 0">▲ back of machine (backbox)</p>
+  <div class="grid2">${tile("RL")}${tile("RR")}${tile("FL")}${tile("FR")}</div>
+  <p class="mut" style="text-align:center;margin:4px 0">▼ front (where you stand)</p>
+  <p class="${L.length?"near":"mut"}" id="legSum">${legSummary(p)}</p>
+  ${L.length?`<p class="mut" style="font-size:12px">A stripped leveler is a cheap part to replace (3/8"-16 for most machines). This is a workaround until then.</p>`:""}
+  <label>Adjust<select id="axSel"><option value="both" ${ax==="both"?"selected":""}>Roll and pitch</option><option value="pitch" ${ax==="pitch"?"selected":""}>Pitch only</option><option value="roll" ${ax==="roll"?"selected":""}>Roll only</option></select></label></div>`;
+}
+// Roll / Pitch guidance when at least one leg is locked
+function lockedGuide(l,p){
+  const roll=step===2, eP=l.p-p.pitch, eR=l.r, L=lockedOf(p);
+  const need=roll?-p.spanLR*Math.tan(eR*D):-p.spanFB*Math.tan(eP*D);
+  const pl=roll?planLegs(p,0,need):planLegs(p,need,0);
+  const got=roll?pl.aR:pl.aP, other=roll?pl.aP:pl.aR, oSpan=roll?p.spanFB:p.spanLR, axis=roll?"roll":"pitch";
+  const lockTxt=`${L.map(k=>LEGN[k]).join(" and ")} leg${L.length>1?"s are":" is"} locked (leave ${L.length>1?"them":"it"} alone).`;
+  const head=roll?`${eR>0?"RIGHT":"LEFT"} side is low by ${Math.abs(eR).toFixed(2)}°.`:(eP<0?`Needs ${Math.abs(eP).toFixed(2)}° more pitch.`:`${eP.toFixed(2)}° too steep.`);
+  if(Math.abs(got)<0.35*Math.abs(need))
+    return {ok:false,t:`${head}<br>${lockTxt}<br><b class="far">${axis[0].toUpperCase()+axis.slice(1)} can't be adjusted with that leg locked.</b> <span class="mut" style="font-weight:400">Free the leg or replace its leveler, or skip this step and accept the reading.</span>`};
+  const mv=LEGS.filter(k=>!L.includes(k)&&Math.abs(pl.d[k])>=0.004);
+  const lines=mv.map(k=>{const d=pl.d[k], g=turnsIn(Math.abs(d),p.tpi);
+    return `<li>${LEGN[k]} leg's leveler bolt: <b>${d>0?T().cw:T().ccw} ≈ ${g.txt} turn${g.t>1.1?"s":""}</b> <span class="mut" style="font-weight:400">(${d>0?"raises":"lowers"} that corner)</span></li>`}).join("");
+  const side=Math.abs(other)>0.003?`<br><span class="near" style="font-weight:400">This also shifts ${roll?"pitch":"roll"} by about ${(Math.atan(other/oSpan)/D).toFixed(2)}° because of the locked leg.</span>`:"";
+  const part=Math.abs(got)<0.95*Math.abs(need)?`<br><span class="near" style="font-weight:400">Only part of the correction is possible with that leg locked.</span>`:"";
+  return {ok:false,t:`${head}<br>${lockTxt}<ul style="margin:4px 0;padding-left:20px">${lines}</ul><span class="mut" style="font-weight:400">Looking down at the wrench. Turn the bolts, not the jam nuts. Left/right as you stand at the front.</span>${side}${part}`};
+}
+
+/* ---------- leg response test: does this leg's leveler actually move the machine? ---------- */
+// Turn one leg a known number of full turns and compare the measured tilt change with what the geometry predicts.
+let legT=null; // {leg,turns,phase:"ready"|"base"|"turn"|"meas"|"done",base,end,res}
+let LEGT_MS=1500;
+const collectLive=ms=>new Promise(res=>{const a=[],iv=setInterval(()=>a.push(liveRaw()),50);setTimeout(()=>{clearInterval(iv);res(a)},ms)});
+function legExpected(p,k,n){const h=n/p.tpi; return {p:Math.atan(BP[k]*h/(2*p.spanFB))/D, r:Math.atan(BR[k]*h/(2*p.spanLR))/D}}
+function legResult(){
+  const p=prof(), t=legT, e=legExpected(p,t.leg,t.turns), m={p:t.end.p-t.base.p,r:t.end.r-t.base.r};
+  const ee=e.p*e.p+e.r*e.r;
+  return {e,m,s:(m.p*e.p+m.r*e.r)/ee, small:Math.sqrt(ee)<0.05};
+}
+async function startLegTest(){
+  await startSensors();
+  legT.phase="base"; legT.res=null; render();
+  const a=await collectLive(LEGT_MS); legT.base={p:meanOf(a,"p"),r:meanOf(a,"r")}; legT.phase="turn"; render();
+}
+async function finishLegTest(){
+  legT.phase="meas"; render();
+  const a=await collectLive(LEGT_MS); legT.end={p:meanOf(a,"p"),r:meanOf(a,"r")}; legT.res=legResult(); legT.phase="done"; render();
+}
+function viewLegTest(){
+  const p=prof(), t=legT, k=t.leg, e=legExpected(p,k,t.turns), nm=LEGN[k];
+  let body="";
+  if(t.phase==="ready") body=`<p class="mut">This checks whether turning the <b>${nm}</b> leg's leveler bolt really moves the machine. Lay the phone flat on the playfield and <b>leave it there</b> for the whole test.</p>
+    <label>Full turns to test<input id="ltTurns" type="number" min="1" max="8" step="1" value="${t.turns}"></label>
+    <p class="mut">Expected change: pitch ${f2(e.p)}°, roll ${f2(e.r)}° (${t.turns} turn${t.turns>1?"s":""} raising that corner).</p>
+    <div class="row"><button id="ltCancel">Cancel</button><button class="pri" id="ltStart" ${(raw.has||sim)?"":"disabled"}>Start</button></div>
+    ${(raw.has||sim)?"":`<p class="near">No motion data yet. Start the sensor from the Setup screen first.</p>`}`;
+  else if(t.phase==="base"||t.phase==="meas") body=`<p><b>Hold still…</b> measuring the ${t.phase==="base"?"starting level":"new level"}.</p>`;
+  else if(t.phase==="turn") body=`<p>Now turn the <b>${nm}</b> leg's leveler bolt <b>${T().cw} ${t.turns} full turn${t.turns>1?"s":""}</b> (looking down at the wrench; this raises that corner). <b>Don't move the phone.</b></p>
+    <p class="mut">If the bolt just spins or the threads feel stripped, stop; don't force it. Tap Done either way.</p><button class="pri" id="ltDone" style="width:100%">Done turning</button>`;
+  else{
+    const r=t.res, pct=Math.round(r.s*100), nums=`<p class="mut">Expected pitch ${f2(r.e.p)}°, roll ${f2(r.e.r)}°. Measured pitch ${f2(r.m.p)}°, roll ${f2(r.m.r)}°.</p>`;
+    const lockBtn=(p.locked||[]).includes(k)?`<span class="mut">Already marked locked.</span>`:`<button class="pri" id="ltLock">Mark ${nm} as can't adjust</button>`;
+    body=(r.small?`<p class="near"><b>Too small to measure.</b> Use more turns and test again.</p>`
+      :r.s>=0.5?`<p class="good"><b>✅ This leg responds</b> (${pct}% of the expected change). It's adjustable.</p>`
+      :r.s>=0.2?`<p class="near"><b>⚠ Weak response</b> (${pct}% of expected). It may be slipping, or the cabinet is flexing. Try more turns, or treat it as stuck.</p>${lockBtn}`
+      :r.s>-0.3?`<p class="far"><b>❌ No real response</b> (${pct}% of expected). This leg looks stuck or stripped.</p>${lockBtn}`
+      :`<p class="far"><b>↩ The machine tilted the OPPOSITE way</b> (${pct}%). That isn't a stuck leg: either clockwise/counterclockwise is swapped for your levelers, or a sensor axis is reversed. See "Directions backwards?" on the Setup screen.</p>`)
+      +nums+`<div class="row" style="margin-top:8px"><button id="ltAgain">Test again</button><button id="ltBack">Back to Setup</button></div>`;
+  }
+  return `<div class="card"><h2>Leg test: ${nm}</h2>${body}</div>`;
+}
+function bindLegs(){
+  document.querySelectorAll("[data-leg]").forEach(b=>b.onclick=()=>{
+    const p=prof(), k=b.dataset.leg, s=new Set(p.locked||[]); s.has(k)?s.delete(k):s.add(k);
+    p.locked=LEGS.filter(x=>s.has(x)); persist(); render()});
+  document.querySelectorAll("[data-legtest]").forEach(b=>b.onclick=()=>{legT={leg:b.dataset.legtest,turns:3,phase:"ready"};render()});
+  const ax=$("#axSel"); if(ax)ax.onchange=()=>{prof().axes=ax.value;persist();render()};
+  const tn=$("#ltTurns"); if(tn)tn.onchange=()=>{legT.turns=Math.max(1,Math.min(8,parseInt(tn.value)||3));render()};
+  const st=$("#ltStart"); if(st)st.onclick=startLegTest;
+  const dn=$("#ltDone"); if(dn)dn.onclick=finishLegTest;
+  const cn=$("#ltCancel"); if(cn)cn.onclick=()=>{legT=null;render()};
+  const ag=$("#ltAgain"); if(ag)ag.onclick=()=>{legT.phase="ready";legT.res=null;render()};
+  const bk=$("#ltBack"); if(bk)bk.onclick=()=>{legT=null;render()};
+  const lk=$("#ltLock"); if(lk)lk.onclick=()=>{const p=prof();p.locked=LEGS.filter(x=>x===legT.leg||(p.locked||[]).includes(x));persist();legT=null;render()};
+}
+
 /* ---------- sensor test ---------- */
 // Validates a real phone: event rate + noise, beta/gamma sign convention, accuracy vs a known wedge.
 // All numbers here are UNCALIBRATED raw readings (calibration offset not applied).
@@ -674,10 +814,11 @@ function bindTest(){
 function bind(){
   bindTest();
   const tb=$("#testBtn"); if(tb)tb.onclick=async()=>{await startSensors();tst=Object.assign({busy:"",known:6.5},LS("pl.test")||{},{busy:""});render()};
-  const go=n=>{flow.on=false;if(n<=2)spots={};step=n;okSince=0;chimed=false;hold=0;saved=false;render()};
+  const go=n=>{flow.on=false;if(n<=3)spots={};step=n;okSince=0;chimed=false;hold=0;saved=false;render()};
   const nx=$("#next"), bk=$("#back");
-  if(nx)nx.onclick=()=>{ if(step===5)go(2); else if(step===4)go(saved?5:2); else go(step+1) };
-  if(bk)bk.onclick=()=>go(Math.max(0,step-1));
+  if(nx)nx.onclick=()=>{ if(step===5)go(stepAfter(1)); else if(step===4)go(saved?5:stepAfter(1)); else go(stepAfter(step)) };
+  if(bk)bk.onclick=()=>go(stepBefore(step));
+  bindLegs();
   const sel=$("#profSel"); if(sel)sel.onchange=()=>{cur=sel.value;persist();render()};
   const st=$("#startBtn"); if(st)st.onclick=async()=>{await startSensors();go(1)};
   const ed=$("#editBtn"); if(ed)ed.onclick=()=>{const e=$("#editor");e.innerHTML=e.innerHTML?"":editorHtml();bindEditor()};
