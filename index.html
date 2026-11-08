@@ -56,9 +56,10 @@ a{color:var(--acc)}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="1.9.2";
+const VERSION="1.9.3";
 const BUILD_DATE="2026-11-08";
 const CHANGELOG=[
+ ["1.9.3","2026-11-08","Sensor test sign check is now: A. flat, B. top edge raised, C. right edge raised (was right edge lowered). Roll is judged by whether the reading falls when the right edge is raised."],
  ["1.9.2","2026-11-08","When there is no motion data the app now says why (page security, running inside another app, permission state, empty events) and lists fixes. Added a Retry sensors button on the simulator banner and the Sensor test, and a fallback to the absolute-orientation event."],
  ["1.9.1","2026-11-08","If the reading gets worse twice in a row while you follow Roll or Pitch, the app now says so and offers one tap to swap clockwise/counterclockwise or to run the sensor sign check. The leg test's 'opposite way' result also offers the swap. Locked-leg steps remind you to do every leg listed."],
  ["1.9.0","2026-11-08","Legs that can't be adjusted: mark any leg as locked (stripped or seized leveler) and Roll/Pitch move only the other legs, keeping all four feet in plane so the cabinet doesn't rock. Setup says which axes are still adjustable. A Test button checks whether a leg actually responds. New Adjust setting: both, pitch only, or roll only."],
@@ -799,12 +800,17 @@ function noiseStats(a){
   const rec=["strict","normal","relaxed"].find(k=>p90<=THR[k]*0.8)||null;
   return {p90,sdP:sd("p"),sdR:sd("r"),n:a.length,hz:evRate(),rec};
 }
-function signVerdict(d,name){return Math.abs(d)<0.5?`too small to tell (Δ${f2(d)}°, prop it up more)`:d>0?`OK: ${name} increased (Δ${f2(d)}°), matches the app`:`FLIPPED: ${name} decreased (Δ${f2(d)}°), opposite of the app's assumption`}
+// exp = the direction the app expects the reading to move: +1 rises, -1 falls
+function signVerdict(d,name,exp=1){
+  if(Math.abs(d)<0.5)return `too small to tell (Δ${f2(d)}°, prop it up more)`;
+  const how=d>0?"increased":"decreased";
+  return (d>0)===(exp>0)?`OK: ${name} ${how} (Δ${f2(d)}°), matches the app`:`FLIPPED: ${name} ${how} (Δ${f2(d)}°), opposite of the app's assumption`;
+}
 // From the raw (unsigned) sign check: which axes need reversing. null until at least one axis is measured clearly.
 function signFix(t){
   const dP=t.flat&&t.top?t.top.p-t.flat.p:0, dR=t.flat&&t.right?t.right.r-t.flat.r:0;
   const okP=Math.abs(dP)>=0.5, okR=Math.abs(dR)>=0.5; if(!okP&&!okR)return null;
-  const revP=okP?dP<0:opts.revP, revR=okR?dR<0:opts.revR;
+  const revP=okP?dP<0:opts.revP, revR=okR?dR>0:opts.revR; // raising the TOP edge should raise beta; raising the RIGHT edge should lower gamma
   return {revP,revR,text:`Pitch will be ${revP?"reversed":"normal"}, roll ${revR?"reversed":"normal"}.`};
 }
 function wedgeStats(t){
@@ -817,7 +823,7 @@ function testText(){
   L.push(`Event rate: ${evRate().toFixed(0)} Hz`);
   if(t.noise)L.push(`Noise at rest (${TEST_MS.noise/1000} s): worst-case 1.5 s range (p90) ${t.noise.p90.toFixed(3)}°, std dev pitch ${t.noise.sdP.toFixed(3)}° roll ${t.noise.sdR.toFixed(3)}°, suggested strictness: ${t.noise.rec||"none (too noisy)"}`);
   if(t.flat&&t.top)L.push(`Sign, pitch: ${signVerdict(t.top.p-t.flat.p,"beta")}`);
-  if(t.flat&&t.right)L.push(`Sign, roll: ${signVerdict(t.right.r-t.flat.r,"gamma")}`);
+  if(t.flat&&t.right)L.push(`Sign, roll (right edge raised): ${signVerdict(t.right.r-t.flat.r,"gamma",-1)}`);
   const w=wedgeStats(t); if(w)L.push(`Wedge ${t.known}°: measured ${w.meas.toFixed(2)}° (error ${f2(w.err)}°, ${w.verdict}); sensor offset pitch ${f2(w.offP)}° roll ${f2(w.offR)}°`);
   return L.join("\n");
 }
@@ -835,10 +841,10 @@ function viewTest(){
   ${n.rec?`Suggested settle strictness: <b class="good">${n.rec}</b> ${opts.strict===n.rec?`<span class="mut">(already set)</span>`:`<button id="tApply" style="padding:4px 10px">Apply</button>`}`
     :`<b class="far">Too noisy for the strictest settings.</b> <span class="mut">Use Relaxed, check for vibration, or place the phone on something rigid.</span>`}</p>`:""}</div>
   <div class="card"><h2>2. Sign check</h2>
-  <p class="mut">Prop each edge up about 2 cm (a book or a few coins), keep it still, and tap the button. The app assumes <b>top edge up → beta rises</b> and <b>right edge down → gamma rises</b>.</p>
-  <div class="row">${btn("tFlat","A. Flat")}${btn("tTop","B. Top edge raised")}${btn("tRight","C. Right edge lowered")}</div>
+  <p class="mut">Do these in order, with the phone screen up. For B and C, prop that edge up about 2 cm (a book or a few coins), keep the phone still, and tap the button. "Top" is the end with the front camera; "right" is the right side as you look at the screen. The app assumes <b>top edge raised → beta rises</b> and <b>right edge raised → gamma falls</b>.</p>
+  <div class="row">${btn("tFlat","A. Flat")}${btn("tTop","B. Top edge raised")}${btn("tRight","C. Right edge raised")}</div>
   <p class="mut">${t.flat?`Flat: beta ${t.flat.p.toFixed(2)}° gamma ${t.flat.r.toFixed(2)}°`:"Start with A."}</p>
-  ${t.flat&&t.top?`<p>Pitch: ${esc(signVerdict(t.top.p-t.flat.p,"beta"))}</p>`:""}${t.flat&&t.right?`<p>Roll: ${esc(signVerdict(t.right.r-t.flat.r,"gamma"))}</p>`:""}
+  ${t.flat&&t.top?`<p>Pitch: ${esc(signVerdict(t.top.p-t.flat.p,"beta"))}</p>`:""}${t.flat&&t.right?`<p>Roll: ${esc(signVerdict(t.right.r-t.flat.r,"gamma",-1))}</p>`:""}
   ${signFix(t)?`<button id="tSignApply" class="pri">Apply measured signs</button> <span class="mut">${signFix(t).text}</span>`:""}${fixHtml()}</div>
   <div class="card"><h2>3. Accuracy vs a known wedge</h2>
   <p class="mut">Use a wedge or shim of known angle (measure it with a digital level). Put the phone on it with the top toward the <b>high</b> end and tap A, then rotate it 180° in the same spot and tap B. Averaging the two cancels the sensor's own offset.</p>
