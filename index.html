@@ -56,9 +56,10 @@ a{color:var(--acc)}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="1.9.1";
+const VERSION="1.9.2";
 const BUILD_DATE="2026-11-08";
 const CHANGELOG=[
+ ["1.9.2","2026-11-08","When there is no motion data the app now says why (page security, running inside another app, permission state, empty events) and lists fixes. Added a Retry sensors button on the simulator banner and the Sensor test, and a fallback to the absolute-orientation event."],
  ["1.9.1","2026-11-08","If the reading gets worse twice in a row while you follow Roll or Pitch, the app now says so and offers one tap to swap clockwise/counterclockwise or to run the sensor sign check. The leg test's 'opposite way' result also offers the swap. Locked-leg steps remind you to do every leg listed."],
  ["1.9.0","2026-11-08","Legs that can't be adjusted: mark any leg as locked (stripped or seized leveler) and Roll/Pitch move only the other legs, keeping all four feet in plane so the cabinet doesn't rock. Setup says which axes are still adjustable. A Test button checks whether a leg actually responds. New Adjust setting: both, pitch only, or roll only."],
  ["1.8.0","2026-11-07","Audio cues: rising tone when your adjustment is improving the reading, falling buzz when it is getting worse, a soft tick each second while sensor data is live, and an alarm if it stops. Corrections for backwards directions: reverse pitch sensor, reverse roll sensor, swap clockwise/counterclockwise; the Sensor test can apply the measured signs."],
@@ -144,8 +145,10 @@ const persist=()=>{save("pl.profiles",P);save("pl.cur",cur);save("pl.off",off);s
 /* ---------- sensors ---------- */
 const D=Math.PI/180;
 let raw={p:0,r:0,has:false}, sm={p:0,r:0,init:false}, sim=null, rawLast={p:0,r:0,a:null}, evT=[], lastEv=0;
+let evAll=0, evNull=0, permRes="not requested", permQ={}, absOn=false; // diagnostics: why is there no motion data?
 function onOri(e){
-  if(e.beta==null||e.gamma==null)return;
+  evAll++;
+  if(e.beta==null||e.gamma==null){evNull++;return} // browsers send empty values when motion sensors are blocked or missing
   const wasSim=sim&&sim.auto; raw.has=true;
   rawLast.p=e.beta; rawLast.r=e.gamma; rawLast.a=e.alpha; // unsmoothed, used by settle / spot-check logic
   const nt=performance.now(); lastEv=nt; evT.push(nt); while(evT.length&&nt-evT[0]>2000)evT.shift();
@@ -159,13 +162,49 @@ async function startSensors(){
   if(sensing)return;
   try{
     if(typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission==="function"){
-      const r=await DeviceOrientationEvent.requestPermission(); if(r==="denied"){sim=sim||{auto:true,p:prof().pitch+0.8,r:0.4};render();return;}
+      const r=await DeviceOrientationEvent.requestPermission(); permRes=String(r);
+      if(r==="denied"){sim=sim||{auto:true,p:prof().pitch+0.8,r:0.4};render();return;}
     }
-  }catch(e){}
+  }catch(e){permRes="error: "+((e&&e.name)||e)}
   window.addEventListener("deviceorientation",onOri,true);
   sensing=true;
+  queryPerms();
   try{ if(navigator.wakeLock) navigator.wakeLock.request("screen").catch(()=>{}); }catch(e){}
-  setTimeout(()=>{ if(!raw.has){ sim=sim||{auto:true,p:prof().pitch+0.8,r:0.4}; render(); } },1800);
+  setTimeout(()=>{ if(!raw.has){
+    // nothing usable yet: also listen to the absolute-orientation event (same beta/gamma on Chrome for Android), then fall back to the simulator
+    if(!absOn){absOn=true;window.addEventListener("deviceorientationabsolute",onOri,true)}
+    sim=sim||{auto:true,p:prof().pitch+0.8,r:0.4}; render(); } },1800);
+}
+async function queryPerms(){
+  for(const n of ["accelerometer","gyroscope","magnetometer"]){
+    try{const r=await navigator.permissions.query({name:n}); permQ[n]=r.state}catch(e){permQ[n]="n/a"}
+  }
+}
+// Retry from scratch (needs a tap, so the browser will show its permission prompt if it has one)
+async function retrySensors(){
+  try{window.removeEventListener("deviceorientation",onOri,true);window.removeEventListener("deviceorientationabsolute",onOri,true)}catch(e){}
+  sensing=false; absOn=false; evAll=0; evNull=0; if(sim&&sim.auto)sim=null; render();
+  await startSensors(); render();
+}
+const diagEv=()=>`${evAll}${evNull?` (<b class='far'>${evNull} with empty values</b>: the browser is blocking motion sensors)`:""}`;
+function diagHtml(){
+  const row=(k,v)=>`<tr><td class="mut" style="padding:2px 8px 2px 0;vertical-align:top">${k}</td><td>${v}</td></tr>`;
+  const perm=Object.entries(permQ).map(([k,v])=>k+": "+v).join(", ")||"checking…";
+  const inFrame=(()=>{try{return window.top!==window}catch(e){return true}})();
+  return `<details open style="margin-top:8px"><summary class="mut">Why no motion data? Details and fixes</summary>
+  <table style="font-size:13px;margin:6px 0">
+  ${row("Page",esc(location.protocol+"//"+(location.host||"(local file)"))+(window.isSecureContext?"":" <b class='far'>not secure: sensors need https</b>"))}
+  ${row("Inside another app or frame",inFrame?"<b class='far'>yes: sensors are usually blocked there</b>":"no")}
+  ${row("Motion API",typeof DeviceOrientationEvent!=="undefined"?"present":"<b class='far'>missing</b>")}
+  ${row("Permission prompt",typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission==="function"?"supported, answer: "+esc(permRes):"not needed")}
+  ${row("Browser sensor permissions",esc(perm))}
+  ${row("Events received",`<span id="diagEv">${diagEv()}</span>`)}
+  </table>
+  <p class="mut" style="font-size:13px;margin:4px 0">Things to try, in order:</p>
+  <ol class="mut" style="font-size:13px"><li>Open this page in <b>Chrome itself</b>, not inside another app (Gmail, Drive, Messages, GitHub, a link preview). In that app's menu choose "Open in Chrome".</li>
+  <li>In Chrome: ⋮ → Settings → Site settings → <b>Motion sensors</b> → allow, and make sure this site isn't in the blocked list. Or tap the icon left of the address bar → Permissions.</li>
+  <li>Pixel: if Developer options has the <b>Sensors Off</b> quick tile switched on, turn it off.</li>
+  <li>Tap <b>Retry sensors</b>, then reload the page once.</li></ol></details>`;
 }
 const dir=()=>opts.flip?-1:1;
 function live(){
@@ -237,7 +276,8 @@ function render(){
   const p=prof();
   let h=`<header><h1>🎯 Pin Leveler <small class="mut">v${VERSION}</small></h1><div class="dots">${STEPS.map((s,i)=>`<i class="${i===step?"on":i<step?"done":""}" title="${s}"></i>`).join("")}</div></header>`;
   if(step>=1)h+=`<div class="mut" id="dbg" style="margin:-4px 0 8px;font-size:12px"></div>`;
-  if(sim)h+=`<div class="card sim"><b class="near">⚠ SIMULATED readings: no motion data from this phone.</b> <span class="mut">Open the page over HTTPS in Chrome, allow motion sensors, and reload. These sliders are fake.</span>
+  if(sim&&!tst)h+=`<div class="card sim"><b class="near">⚠ SIMULATED readings: no motion data from this phone.</b> <span class="mut">These sliders are fake.</span>
+   <div class="row fit" style="margin-top:6px"><button class="pri retrySens">Retry sensors</button></div>${diagHtml()}
    <label>Pitch <span id="sp">${sim.p.toFixed(2)}</span>°<input id="simP" type="range" min="3" max="10" step="0.05" value="${sim.p}"></label>
    <label>Roll <span id="sr">${sim.r.toFixed(2)}</span>°<input id="simR" type="range" min="-3" max="3" step="0.05" value="${sim.r}"></label></div>`;
   if(tst) h+=viewTest();
@@ -401,6 +441,7 @@ function guideText(l,p){
 
 function update(){
   const p=prof(), l=live();
+  const de=$("#diagEv"); if(de)de.innerHTML=diagEv();
   if(tst){const e=$("#tLive"); if(e)e.innerHTML=raw.has?`beta <b>${rawLast.p.toFixed(2)}°</b> · gamma <b>${rawLast.r.toFixed(2)}°</b> · alpha ${rawLast.a==null?"–":rawLast.a.toFixed(0)+"°"} · <b>${evRate().toFixed(0)} Hz</b>`:"<b class='near'>NO DATA</b>"; return;}
   const d=$("#dbg"); if(d) d.textContent= sim?"Sensor: NO DATA (simulating)":(raw.has?`Sensor: live · raw pitch ${sm.p.toFixed(2)}° roll ${sm.r.toFixed(2)}° · offset ${off.p.toFixed(2)}°/${off.r.toFixed(2)}°`:"Sensor: waiting for data…");
   if(step===1){
@@ -786,7 +827,7 @@ function viewTest(){
   const n=t.noise, w=wedgeStats(t);
   return `<div class="card"><h2>Sensor test</h2>
   <p class="mut">Checks this phone's sensor. Do it on a hard, flat surface; the readings here are raw (calibration is not applied). Copy the results at the bottom.</p>
-  ${ok?"":`<p class="near"><b>No motion data from this phone.</b> <span class="mut">Open the page over HTTPS in Chrome and allow motion sensors.</span></p>`}
+  ${ok?"":`<p class="near"><b>No motion data from this phone.</b></p><button class="pri retrySens">Retry sensors</button>${diagHtml()}`}
   <div class="guide" id="tLive" style="min-height:0"></div></div>
   <div class="card"><h2>1. Noise at rest</h2>
   <p class="mut">Lay the phone flat and keep it still for ${TEST_MS.noise/1000} s (nobody bumping the machine).</p>${btn("tNoise","Measure noise","pri")}
@@ -825,6 +866,7 @@ function bindTest(){
 
 function bind(){
   bindTest();
+  document.querySelectorAll(".retrySens").forEach(b=>b.onclick=retrySensors);
   const tb=$("#testBtn"); if(tb)tb.onclick=async()=>{await startSensors();tst=Object.assign({busy:"",known:6.5},LS("pl.test")||{},{busy:""});render()};
   const hs=$("#hintSwap"); if(hs)hs.onclick=()=>{opts.revTurn=!opts.revTurn;persist();worseN=0;worseHint=false;trendHist=[];render()};
   const hn=$("#hintSensor"); if(hn)hn.onclick=async()=>{await startSensors();worseN=0;worseHint=false;tst=Object.assign({busy:"",known:6.5},LS("pl.test")||{},{busy:""});render()};
