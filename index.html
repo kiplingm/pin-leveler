@@ -56,9 +56,10 @@ a{color:var(--acc)}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="1.9.4";
+const VERSION="1.9.5";
 const BUILD_DATE="2026-11-09";
 const CHANGELOG=[
+ ["1.9.5","2026-11-09","Sensor start race fix: if no motion data has arrived, the app now re-attaches its sensor listeners every second (and on focus, visible and tap) until data flows, so a page that needed a reload to find the sensor now finds it on its own."],
  ["1.9.4","2026-11-09","The Roll only / Pitch only / Both switch is now also on the Calibrate, Roll, Pitch and Verify screens and takes effect immediately (it skips to the right step). New progress bar on Roll and Pitch shows how far you've come since the step started. The live display can no longer freeze if one update fails."],
  ["1.9.3","2026-11-08","Sensor test sign check is now: A. flat, B. top edge raised, C. right edge raised (was right edge lowered). Roll is judged by whether the reading falls when the right edge is raised."],
  ["1.9.2","2026-11-08","When there is no motion data the app now says why (page security, running inside another app, permission state, empty events) and lists fixes. Added a Retry sensors button on the simulator banner and the Sensor test, and a fallback to the absolute-orientation event."],
@@ -182,6 +183,19 @@ async function queryPerms(){
     try{const r=await navigator.permissions.query({name:n}); permQ[n]=r.state}catch(e){permQ[n]="n/a"}
   }
 }
+// Race fix: on some loads Chrome never starts delivering events to the listener that was added during page load
+// (a reload fixes it). While there is no data, drop and re-add the listeners again and again, and on every focus / visible / tap.
+let rearmN=0;
+function rearm(){
+  if(raw.has||!sensing)return;
+  rearmN++;
+  try{window.removeEventListener("deviceorientation",onOri,true);window.removeEventListener("deviceorientationabsolute",onOri,true)}catch(e){}
+  window.addEventListener("deviceorientation",onOri,true);
+  if(absOn)window.addEventListener("deviceorientationabsolute",onOri,true);
+}
+setInterval(()=>{ if(!raw.has&&sensing&&(rearmN<12||Date.now()%5<1))rearm() },1000);
+["visibilitychange","pageshow","focus"].forEach(n=>window.addEventListener(n,()=>{ if(document.visibilityState!=="hidden")rearm() }));
+window.addEventListener("pointerdown",()=>rearm(),true);
 // Retry from scratch (needs a tap, so the browser will show its permission prompt if it has one)
 async function retrySensors(){
   try{window.removeEventListener("deviceorientation",onOri,true);window.removeEventListener("deviceorientationabsolute",onOri,true)}catch(e){}
