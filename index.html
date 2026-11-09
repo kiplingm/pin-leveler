@@ -56,9 +56,10 @@ a{color:var(--acc)}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="1.9.3";
-const BUILD_DATE="2026-11-08";
+const VERSION="1.9.4";
+const BUILD_DATE="2026-11-09";
 const CHANGELOG=[
+ ["1.9.4","2026-11-09","The Roll only / Pitch only / Both switch is now also on the Calibrate, Roll, Pitch and Verify screens and takes effect immediately (it skips to the right step). New progress bar on Roll and Pitch shows how far you've come since the step started. The live display can no longer freeze if one update fails."],
  ["1.9.3","2026-11-08","Sensor test sign check is now: A. flat, B. top edge raised, C. right edge raised (was right edge lowered). Roll is judged by whether the reading falls when the right edge is raised."],
  ["1.9.2","2026-11-08","When there is no motion data the app now says why (page security, running inside another app, permission state, empty events) and lists fixes. Added a Retry sensors button on the simulator banner and the Sensor test, and a fallback to the absolute-orientation event."],
  ["1.9.1","2026-11-08","If the reading gets worse twice in a row while you follow Roll or Pitch, the app now says so and offers one tap to swap clockwise/counterclockwise or to run the sensor sign check. The leg test's 'opposite way' result also offers the swap. Locked-leg steps remind you to do every leg listed."],
@@ -264,6 +265,7 @@ const f2=x=>(x>=0?"+":"")+x.toFixed(2);
 const cls=(err,tol)=>{const a=Math.abs(err);return a<=tol?"good":a<=tol*3?"near":"far"};
 
 /* ---------- state ---------- */
+let progKey="", progStart=0;
 let step=0, okSince=0, chimed=false, hold=0, saved=false, calA=null, calB=null, capturing=false;
 const STEPS=["Setup","Calibrate","Roll","Pitch","Verify","Spots"];
 // guided order: top, middle, bottom
@@ -391,6 +393,7 @@ function viewCal(){
   <div class="row"><button id="capA" class="pri">Capture A</button><button id="capB" ${calA?"":"disabled"} class="pri">Capture B</button></div>
   <p class="mut" id="calStat">${calA?`A: ${calA.p.toFixed(2)}°, ${calA.r.toFixed(2)}°`:""}${calB?` · B: ${calB.p.toFixed(2)}°, ${calB.r.toFixed(2)}°`:""}</p>
   <p class="mut">Current offset: pitch ${off.p.toFixed(2)}°, roll ${off.r.toFixed(2)}° <button id="calReset" style="padding:4px 8px">reset</button></p>
+  <label>Adjust<select class="axSel2">${[["both","Roll and pitch"],["pitch","Pitch only"],["roll","Roll only"]].map(([k,n])=>`<option value="${k}" ${axesOf(prof())===k?"selected":""}>${n}</option>`).join("")}</select></label>
   <div class="row"><button id="back">Back</button><button class="pri" id="next">${calB?"Next":"Skip"}</button></div></div>`;
 }
 
@@ -405,6 +408,8 @@ function viewLive(){
   <p class="mut" style="text-align:center;margin-top:-4px">Dot = where a ball would drift</p>
   ${worseHint?hintHtml():""}
   <div class="guide" id="guide"></div>
+  ${step<4?`<p class="mut" id="progTxt" style="margin:6px 0 2px;font-size:13px"></p><div class="bar"><i id="progBar"></i></div>`:""}
+  <label style="margin-top:8px">Adjust<select class="axSel2">${[["both","Roll and pitch"],["pitch","Pitch only"],["roll","Roll only"]].map(([k,n])=>`<option value="${k}" ${axesOf(prof())===k?"selected":""}>${n}</option>`).join("")}</select></label>
   <div class="bar"><i id="holdBar"></i></div>
   <div id="result"></div>
   <div class="row" style="margin-top:12px"><button id="back">Back</button><button class="pri" id="next">${step===4?"Start over":"Next"}</button></div>
@@ -465,6 +470,15 @@ function update(){
   const gP=!useP(p)||Math.abs(eP)<=p.tolP, gR=!useR(p)||Math.abs(l.r)<=p.tolR, fP=useP(p)&&Math.abs(eP)>p.tolP*3, fR=useR(p)&&Math.abs(l.r)>p.tolR*3;
   dot.className="d "+(gP&&gR?"good":(fP||fR)?"far":"");
   const g=guideText(l,p); $("#guide").innerHTML=g.t;
+  if(step===2||step===3){ // progress since this step began (or since the axes mode changed)
+    const err=Math.abs(step===2?l.r:eP), tol=step===2?p.tolR:p.tolP, key=step+"|"+cur+"|"+axesOf(p);
+    if(progKey!==key){progKey=key;progStart=Math.max(err,tol*2)}
+    if(err>progStart)progStart=err; // got worse than where we began: widen the scale
+    const pct=err<=tol?100:Math.max(0,Math.min(99,Math.round((1-(err-tol)/(progStart-tol))*100)));
+    const pt=$("#progTxt"), pb=$("#progBar");
+    if(pt)pt.innerHTML=`Progress: <b>${pct}%</b> · started ${progStart.toFixed(2)}° off, now ${err.toFixed(2)}° off (target within ±${tol}°)`;
+    if(pb)pb.style.width=pct+"%";
+  }
   const now=performance.now();
   if(g.ok){ if(!okSince){okSince=now} const held=now-okSince;
     if(held>600&&!chimed){chimed=true;chime(step===4?2:1)}
@@ -882,6 +896,11 @@ function bind(){
   if(nx)nx.onclick=()=>{ if(step===5)go(stepAfter(1)); else if(step===4)go(saved?5:stepAfter(1)); else go(stepAfter(step)) };
   if(bk)bk.onclick=()=>go(stepBefore(step));
   bindLegs();
+  document.querySelectorAll(".axSel2").forEach(s=>s.onchange=()=>{
+    prof().axes=s.value; persist(); worseN=0; worseHint=false; progKey="";
+    // if the current step is no longer used, jump to the next one that is
+    if(step>=2&&step<=3&&skipStep(step,prof())){go(step===2?3:2); return}
+    render()});
   const sel=$("#profSel"); if(sel)sel.onchange=()=>{cur=sel.value;persist();render()};
   const st=$("#startBtn"); if(st)st.onclick=async()=>{await startSensors();go(1)};
   const ed=$("#editBtn"); if(ed)ed.onclick=()=>{const e=$("#editor");e.innerHTML=e.innerHTML?"":editorHtml();bindEditor()};
@@ -934,7 +953,7 @@ function bindEditor(){
   const prev=LS("pl.ver");
   if(prev!==VERSION){ if(prev||hadSaved){showUpd=true;updFrom=prev||"earlier"} save("pl.ver",VERSION); }
 }
-(function loop(){ if(step>=1||tst)update(); requestAnimationFrame(loop) })();
+(function loop(){ try{ if(step>=1||tst)update() }catch(e){ const d=$("#dbg"); if(d)d.textContent="Display error (still running): "+(e&&e.message) } requestAnimationFrame(loop) })();
 if("serviceWorker" in navigator && location.protocol==="https:"){ /* optional: add sw.js for offline */ }
 // Android Chrome grants sensors without a prompt; start early if allowed.
 if(typeof DeviceOrientationEvent!=="undefined"&&typeof DeviceOrientationEvent.requestPermission!=="function"){startSensors()}
