@@ -59,9 +59,10 @@ details.card summary{cursor:pointer}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="2.0.0";
+const VERSION="2.0.1";
 const BUILD_DATE="2026-11-17";
 const CHANGELOG=[
+ ["2.0.1","2026-11-17","If pitch reads negative on the Level screen, a warning now names the saved setting that is flipping it (Phone top → FRONT, Reverse pitch sensor, or a bad calibration offset) with a one-tap fix, or offers the two options if the sensor itself reads negative. The status line now shows which flip / reverse / swap settings are on."],
  ["2.0.0","2026-11-17","Simplified. One live Level screen replaces the Setup / Calibrate / Roll / Pitch / Verify steps: it shows pitch and roll, one combined plan with a turn amount for each of the four legs (locked legs are skipped, and the plan keeps all four feet in one plane), one progress bar and the 3-second confirmation. Tabs: Level, Machine (profile, legs, prep), Tools (spot check, calibrate, sensor test) and About. Pitch only / roll only are now the Adjust pitch / Adjust roll boxes. With no locked legs a correction only raises legs."],
  ["1.9.6","2026-11-09","Voice, Beep, Progress tones and Sensor tick switches now respond right away: turning Voice on says \"Voice on\", turning it off cuts off any speech in progress, and the sound switches play a short sample."],
  ["1.9.5","2026-11-09","Sensor start race fix: if no motion data has arrived, the app now re-attaches its sensor listeners every second (and on focus, visible and tap) until data flows, so a page that needed a reload to find the sensor now finds it on its own."],
@@ -432,6 +433,7 @@ function viewLevel(p){
   <div class="read"><div><small>PITCH (target ${p.pitch}°)${useP(p)?"":" · ignored"}</small><b id="pv">–</b></div><div><small>ROLL (0° target)${useR(p)?"":" · ignored"}</small><b id="rv">–</b></div></div>
   <p class="mut" id="progTxt" style="margin:8px 0 2px;font-size:13px"></p><div class="bar"><i id="progBar"></i></div>
   ${worseHint?hintHtml():""}
+  <div id="pitchHint"></div>
   <div class="guide" id="guide" style="margin-top:10px"></div>
   <p class="mut" style="margin:8px 0 2px;font-size:13px">Hold in tolerance for 3 seconds to confirm:</p><div class="bar"><i id="holdBar"></i></div>
   <div id="result">${saved&&(hist[p.id]||[])[0]?resultHtml(p):""}</div>
@@ -444,6 +446,20 @@ function viewLevel(p){
   <div class="row fit" style="margin-top:6px">${chk("oFlip","flip","Phone top → FRONT")}${chk("oBeep","beep","Beep")}${chk("oSpeak","speak","Voice")}${chk("oTrend","trend","Progress tones")}${chk("oTick","tick","Sensor tick")}</div>
   <p class="mut" style="font-size:12px;margin-bottom:0">Rising tone = getting closer, falling buzz = getting worse. Tick each second = sensor data is live; a low double beep = it stopped.</p>${fixHtml()}</details>`;
 }
+
+// Pitch should be positive with the phone's top toward the (higher) backbox. If it reads negative, say which saved setting is flipping it.
+function pitchHintHtml(l,p){
+  if(sim||!raw.has||!useP(p)||p.pitch<2||l.p>=0)return "";
+  const b=(a,t)=>`<button data-act="${a}" style="margin:4px 4px 0 0">${t}</button>`;
+  let why,btns;
+  if(opts.flip){why=`<b>Phone top → FRONT</b> is ticked, which turns the reading around.`;btns=b("flipOff","Untick it")}
+  else if(opts.revP){why=`<b>Reverse pitch sensor</b> is ticked, which turns the pitch around.`;btns=b("revPOff","Untick it")}
+  else if(Math.abs(off.p)>1){why=`The saved calibration offset is <b>${f2(off.p)}° pitch</b>, which pushes the reading negative.`;btns=b("offReset","Reset the offset")}
+  else{why=`The sensor itself reads ${sm.p.toFixed(2)}° with the phone this way. Either the phone's top is pointing toward the <b>front</b>, or this phone reports pitch reversed.`;
+    btns=b("flipOn","Top really is toward the front: tick Phone top → FRONT")+b("revPOn","Top is toward the backbox: reverse the pitch sensor")}
+  return `<div class="card" style="border-color:var(--warn);margin:10px 0 0"><b class="near">Pitch is negative.</b> <span class="mut">With the phone's top toward the backbox on a back-high machine it should read about +${p.pitch}°.</span><p class="mut" style="margin:6px 0 0">${why}</p>${btns}</div>`;
+}
+const PH_ACT={flipOff:()=>{opts.flip=false},revPOff:()=>{opts.revP=false},offReset:()=>{off={p:0,r:0}},flipOn:()=>{opts.flip=true},revPOn:()=>{opts.revP=true}};
 
 function viewTools(){
   return `<div class="card"><h2>Tools</h2>
@@ -490,7 +506,7 @@ function update(){
   const p=prof(), l=live();
   const de=$("#diagEv"); if(de)de.innerHTML=diagEv();
   if(tst){const e=$("#tLive"); if(e)e.innerHTML=raw.has?`beta <b>${rawLast.p.toFixed(2)}°</b> · gamma <b>${rawLast.r.toFixed(2)}°</b> · alpha ${rawLast.a==null?"–":rawLast.a.toFixed(0)+"°"} · <b>${evRate().toFixed(0)} Hz</b>`:"<b class='near'>NO DATA</b>"; return;}
-  const d=$("#dbg"); if(d) d.textContent= sim?"Sensor: NO DATA (simulating)":(raw.has?`Sensor: live · raw pitch ${sm.p.toFixed(2)}° roll ${sm.r.toFixed(2)}° · offset ${off.p.toFixed(2)}°/${off.r.toFixed(2)}°`:(sensing?"Sensor: waiting for data…":"Sensor: not started"));
+  const d=$("#dbg"); if(d) d.textContent= sim?"Sensor: NO DATA (simulating)":(raw.has?`Sensor: live · raw pitch ${sm.p.toFixed(2)}° roll ${sm.r.toFixed(2)}° · offset ${off.p.toFixed(2)}°/${off.r.toFixed(2)}°${opts.flip?" · FLIP on":""}${opts.revP?" · REVERSE-PITCH on":""}${opts.revR?" · REVERSE-ROLL on":""}${opts.revTurn?" · TURNS swapped":""}`:(sensing?"Sensor: waiting for data…":"Sensor: not started"));
   if(view==="cal"){
     const c=$("#calStat"); if(c&&!capturing&&!calA)c.textContent=`Live: ${sm.p.toFixed(2)}°, ${sm.r.toFixed(2)}°`;
     return;
@@ -514,6 +530,7 @@ function update(){
   dot.style.transform=`translate(${Math.max(-90,Math.min(90,l.r*sc))}px,${Math.max(-90,Math.min(90,eP*sc))}px)`;
   const gP=!useP(p)||Math.abs(eP)<=p.tolP, gR=!useR(p)||Math.abs(l.r)<=p.tolR, fP=useP(p)&&Math.abs(eP)>p.tolP*3, fR=useR(p)&&Math.abs(l.r)>p.tolR*3;
   dot.className="d "+(gP&&gR?"good":(fP||fR)?"far":"");
+  const ph=$("#pitchHint"); if(ph){const hh=pitchHintHtml(l,p); if(hh!==ph.dataset.h){ph.dataset.h=hh;ph.innerHTML=hh}}
   const g=planGuide(l,p); if(g.t!==lastG){lastG=g.t;$("#guide").innerHTML=g.t}
   // progress since this screen opened (or since Adjust changed): worst axis, in units of its tolerance
   const m=Math.max(useP(p)?Math.abs(eP)/p.tolP:0,useR(p)?Math.abs(l.r)/p.tolR:0), key=cur+"|"+axesOf(p);
@@ -926,6 +943,7 @@ function bind(){
   ["oAdjP","oAdjR"].forEach(id=>{const e=$("#"+id); if(e)e.onchange=()=>{
     let P=$("#oAdjP").checked, R=$("#oAdjR").checked; if(!P&&!R){if(id==="oAdjP")P=true;else R=true} // at least one axis
     prof().axes=P&&R?"both":P?"pitch":"roll"; persist(); worseN=0; worseHint=false; progKey=""; render()}});
+  const phb=$("#pitchHint"); if(phb)phb.onclick=e=>{const a=e.target.dataset&&e.target.dataset.act; if(a&&PH_ACT[a]){PH_ACT[a](); persist(); render()}};
   const ob=$("#optBox"); if(ob)ob.ontoggle=()=>{optOpen=ob.open};
   bindLegs();
   const sel=$("#profSel"); if(sel)sel.onchange=()=>{cur=sel.value;persist();render()};
