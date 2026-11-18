@@ -59,9 +59,10 @@ details.card summary{cursor:pointer}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="2.0.1";
-const BUILD_DATE="2026-11-17";
+const VERSION="2.0.2";
+const BUILD_DATE="2026-11-18";
 const CHANGELOG=[
+ ["2.0.2","2026-11-18","Diagnostic log. The app now keeps a history on this phone (up to 400 entries): every settings change, every instruction it gives (which leg, clockwise or counterclockwise, how many turns, with the pitch and roll readings at that moment), how the readings moved afterwards, leg-test results and Level confirmations. Tools → Diagnostic log has Copy log and Clear, so you can paste it when something looks wrong."],
  ["2.0.1","2026-11-17","If pitch reads negative on the Level screen, a warning now names the saved setting that is flipping it (Phone top → FRONT, Reverse pitch sensor, or a bad calibration offset) with a one-tap fix, or offers the two options if the sensor itself reads negative. The status line now shows which flip / reverse / swap settings are on."],
  ["2.0.0","2026-11-17","Simplified. One live Level screen replaces the Setup / Calibrate / Roll / Pitch / Verify steps: it shows pitch and roll, one combined plan with a turn amount for each of the four legs (locked legs are skipped, and the plan keeps all four feet in one plane), one progress bar and the 3-second confirmation. Tabs: Level, Machine (profile, legs, prep), Tools (spot check, calibrate, sensor test) and About. Pitch only / roll only are now the Adjust pitch / Adjust roll boxes. With no locked legs a correction only raises legs."],
  ["1.9.6","2026-11-09","Voice, Beep, Progress tones and Sensor tick switches now respond right away: turning Voice on says \"Voice on\", turning it off cuts off any speech in progress, and the sound switches play a short sample."],
@@ -150,6 +151,41 @@ const prof=()=>P.find(x=>x.id===cur)||P[0];
 const refKey=p=>p.refKey||(PRESETS.find(x=>x.key&&x.key===p.key)||{}).refKey||"mid";
 const refName=p=>(SPOTS.find(s=>s[0]===refKey(p))||SPOTS[1])[1];
 const persist=()=>{save("pl.profiles",P);save("pl.cur",cur);save("pl.off",off);save("pl.opts",opts);save("pl.hist",hist)};
+
+/* ---------- diagnostic log ---------- */
+// Kept in localStorage (pl.log) so a bug report can say what the app told you to do and what the readings did next.
+let LOG=LS("pl.log")||[], logSnap="", logPlan={sig:null,t:0}, logRead={t:0,p:0,r:0};
+const LOGMAX=400;
+function logAdd(k,o){ try{LOG.push(Object.assign({t:Date.now(),k},o)); if(LOG.length>LOGMAX)LOG=LOG.slice(-LOGMAX); save("pl.log",LOG)}catch(e){} }
+function logSettings(){ try{ const p=prof(), s={v:VERSION,prof:p.id,flip:+!!opts.flip,revP:+!!opts.revP,revR:+!!opts.revR,revTurn:+!!opts.revTurn,axes:axesOf(p),locked:lockedOf(p).join("+")||"-",offP:+off.p.toFixed(2),offR:+off.r.toFixed(2),tpi:p.tpi,pitch:p.pitch}, j=JSON.stringify(s); if(j===logSnap)return;
+  const prev=logSnap?JSON.parse(logSnap):null; logSnap=j;
+  if(!prev)logAdd("start",{s}); else{const ch={}; for(const k in s)if(s[k]!==prev[k])ch[k]=prev[k]+"→"+s[k]; logAdd("set",{ch})} }catch(e){} }
+function logLevel(l,p,g,eP){
+  if(sim||!raw.has)return; const now=Date.now();
+  const sig=g.ok?"ok":g.acts.map(a=>a.split(" ").slice(0,2).join(" ")).join(",");
+  if(sig!==logPlan.sig&&now-logPlan.t>=2500){logPlan={sig,t:now}; logRead={t:now,p:eP,r:l.r};
+    logAdd("plan",{eP:+eP.toFixed(2),eR:+l.r.toFixed(2),rp:+sm.p.toFixed(2),rr:+sm.r.toFixed(2),a:g.acts})}
+  else if(now-logRead.t>=4000&&(Math.abs(eP-logRead.p)>0.2||Math.abs(l.r-logRead.r)>0.2)){logRead={t:now,p:eP,r:l.r}; logAdd("read",{eP:+eP.toFixed(2),eR:+l.r.toFixed(2)})}
+}
+function logText(){
+  const tm=t=>{const d=new Date(t);return (d.getMonth()+1)+"/"+d.getDate()+" "+d.toTimeString().slice(0,8)}, sg2=x=>(x>=0?"+":"")+x.toFixed(2);
+  const L=LOG.map(e=>{const h=tm(e.t)+" ";
+    if(e.k==="start")return h+"START "+Object.entries(e.s).map(([k,v])=>k+"="+v).join(" ");
+    if(e.k==="set")return h+"SET "+Object.entries(e.ch).map(([k,v])=>k+" "+v).join(", ");
+    if(e.k==="plan")return h+"PLAN pitchErr "+sg2(e.eP)+" roll "+sg2(e.eR)+" (sensor "+e.rp+"/"+e.rr+") -> "+(e.a.length?e.a.join("; "):"level");
+    if(e.k==="read")return h+"READ pitchErr "+sg2(e.eP)+" roll "+sg2(e.eR);
+    if(e.k==="level")return h+"LEVEL confirmed pitch "+e.p+" roll "+e.r;
+    if(e.k==="legtest")return h+"LEGTEST "+e.leg+" turned "+e.turns+" "+e.dir+" -> measured pitch "+sg2(e.mp)+" roll "+sg2(e.mr)+", expected "+sg2(e.ep)+"/"+sg2(e.er)+", verdict "+e.v;
+    return h+JSON.stringify(e)});
+  return "Pin Leveler v"+VERSION+" log, "+LOG.length+" entries\n(pitchErr = pitch minus target; roll 0 = level; PLAN legs: cw/ccw as told to the user, arrow = raises/lowers the corner)\n"+L.join("\n");
+}
+function logCardHtml(){
+  const last=logText().split("\n").slice(2).slice(-8).join("\n");
+  return `<div class="card"><h2>Diagnostic log</h2><p class="mut">The app saves what it told you to do and how the readings moved, on this phone only. <b>${LOG.length}</b> entries.</p>
+  <div class="row"><button id="logCopy">Copy log</button><button id="logClear">Clear</button></div>
+  <textarea id="logOut" readonly style="width:100%;height:150px;margin-top:8px;font-size:11px;display:none"></textarea>
+  ${last?`<pre class="mut" style="font-size:11px;white-space:pre-wrap;margin:8px 0 0">${esc(last)}</pre>`:""}</div>`;
+}
 
 /* ---------- sensors ---------- */
 const D=Math.PI/180;
@@ -302,6 +338,7 @@ function nav(v){
   render(); try{window.scrollTo(0,0)}catch(e){}
 }
 function render(){
+  logSettings();
   const p=prof(), cur=(view==="spots"||view==="cal")?"tools":view;
   let h=`<header><h1>🎯 Pin Leveler <small class="mut">v${VERSION}</small></h1></header>
   <nav class="tabs">${[["level","Level"],["machine","Machine"],["tools","Tools"],["about","About"]].map(([k,n])=>`<button data-nav="${k}" class="${k===cur?"on":""}">${n}</button>`).join("")}</nav>
@@ -466,7 +503,7 @@ function viewTools(){
   <div class="row" style="margin-bottom:8px"><button id="toolSpots">Spot check (top / middle / bottom)</button></div>
   <div class="row" style="margin-bottom:8px"><button id="toolCal">Calibrate the phone</button></div>
   <div class="row" style="margin-bottom:8px"><button id="testBtn">Sensor test (check this phone)</button></div>
-  <p class="mut">To check whether a leg's leveler really moves the machine, open <b>Machine</b> and tap <b>Test</b> under that leg.</p></div>`;
+  <p class="mut">To check whether a leg's leveler really moves the machine, open <b>Machine</b> and tap <b>Test</b> under that leg.</p></div>${logCardHtml()}`;
 }
 
 function viewAbout(){
@@ -480,15 +517,17 @@ function viewAbout(){
 function planGuide(l,p){
   const eP=l.p-p.pitch, eR=l.r, L=lockedOf(p);
   const okP=!useP(p)||Math.abs(eP)<=p.tolP, okR=!useR(p)||Math.abs(eR)<=p.tolR;
-  if(okP&&okR)return {ok:true,t:`✅ Level: pitch ${l.p.toFixed(2)}°, roll ${f2(eR)}°. Hold still…`};
+  if(okP&&okR)return {ok:true,acts:[],t:`✅ Level: pitch ${l.p.toFixed(2)}°, roll ${f2(eR)}°. Hold still…`};
   const needP=okP?0:-p.spanFB*Math.tan(eP*D), needR=okR?0:-p.spanLR*Math.tan(eR*D);
   const pl=planLegs(p,needP,needR);
   const bad=[]; if(!okP&&Math.abs(pl.aP)<0.35*Math.abs(needP))bad.push("pitch"); if(!okR&&Math.abs(pl.aR)<0.35*Math.abs(needR))bad.push("roll");
   const head=[!okR?`${eR>0?"RIGHT":"LEFT"} side is low by ${Math.abs(eR).toFixed(2)}°`:"", !okP?(eP<0?`needs ${Math.abs(eP).toFixed(2)}° more pitch`:`${eP.toFixed(2)}° too steep`):""].filter(Boolean).join(" and ");
+  const acts=[];
   const tile=k=>{
     if(L.includes(k))return `<div class="leg lk"><b>🔒 ${LEGN[k]}</b><br><span class="mut">locked, leave alone</span></div>`;
     const d=pl.d[k], g=turnsIn(Math.abs(d),p.tpi);
     if(Math.abs(d)*p.tpi<0.06)return `<div class="leg"><b>${LEGN[k]}</b><br><span class="mut">no change</span></div>`;
+    acts.push(k+" "+(d>0?"cw":"ccw")+" "+g.t.toFixed(2)+(d>0?"↑":"↓"));
     return `<div class="leg"><b>${LEGN[k]}</b><br><b class="${d>0?"good":"near"}">${d>0?T().cw:T().ccw} ≈ ${g.txt} turn${g.t>1.1?"s":""}</b><br><span class="mut">${d>0?"raises":"lowers"} that corner</span></div>`};
   const notes=[];
   if(L.length)notes.push(`${L.map(k=>LEGN[k]).join(" and ")} leg${L.length>1?"s are":" is"} locked and left alone.`);
@@ -499,7 +538,7 @@ function planGuide(l,p){
     if(okP&&Math.abs(pl.aP)>0.003)notes.push(`This also shifts pitch by about ${(Math.atan(pl.aP/p.spanFB)/D).toFixed(2)}° because of the locked leg.`);
   }
   const grid=bad.length&&bad.length===(okP?0:1)+(okR?0:1)?"":`<p class="mut" style="text-align:center;margin:6px 0 2px">▲ back of machine (backbox)</p><div class="grid2">${["RL","RR","FL","FR"].map(tile).join("")}</div><p class="mut" style="text-align:center;margin:2px 0">▼ front (where you stand)</p>`;
-  return {ok:false,t:`<div>${head[0].toUpperCase()+head.slice(1)}.</div>${grid}<div class="mut" style="font-size:13px;font-weight:400">${notes.join("<br>")}${notes.length?"<br>":""}Do every leg shown together, then wait for the numbers to settle. Looking down at the wrench; turn the leveler bolts, not the jam nuts. Left/right as you stand at the front.</div>`};
+  return {ok:false,acts,t:`<div>${head[0].toUpperCase()+head.slice(1)}.</div>${grid}<div class="mut" style="font-size:13px;font-weight:400">${notes.join("<br>")}${notes.length?"<br>":""}Do every leg shown together, then wait for the numbers to settle. Looking down at the wrench; turn the leveler bolts, not the jam nuts. Left/right as you stand at the front.</div>`};
 }
 
 function update(){
@@ -532,6 +571,7 @@ function update(){
   dot.className="d "+(gP&&gR?"good":(fP||fR)?"far":"");
   const ph=$("#pitchHint"); if(ph){const hh=pitchHintHtml(l,p); if(hh!==ph.dataset.h){ph.dataset.h=hh;ph.innerHTML=hh}}
   const g=planGuide(l,p); if(g.t!==lastG){lastG=g.t;$("#guide").innerHTML=g.t}
+  logLevel(l,p,g,eP);
   // progress since this screen opened (or since Adjust changed): worst axis, in units of its tolerance
   const m=Math.max(useP(p)?Math.abs(eP)/p.tolP:0,useR(p)?Math.abs(l.r)/p.tolR:0), key=cur+"|"+axesOf(p);
   if(progKey!==key){progKey=key;progStart=Math.max(m,2)}
@@ -545,7 +585,7 @@ function update(){
     if(held>600&&!chimed){chimed=true;chime(1)}
     hold=Math.min(1,held/3000); $("#holdBar").style.width=(hold*100)+"%";
     if(hold>=1&&!saved){saved=true;chime(3);
-      (hist[p.id]=hist[p.id]||[]).unshift({t:Date.now(),p:+l.p.toFixed(2),r:+l.r.toFixed(2)}); hist[p.id]=hist[p.id].slice(0,8); persist();
+      (hist[p.id]=hist[p.id]||[]).unshift({t:Date.now(),p:+l.p.toFixed(2),r:+l.r.toFixed(2)}); hist[p.id]=hist[p.id].slice(0,8); persist(); logAdd("level",{p:+l.p.toFixed(2),r:+l.r.toFixed(2)});
       $("#result").innerHTML=resultHtml(p)}
   } else { okSince=0; chimed=false; hold=0; $("#holdBar").style.width="0";
     if(!badSince)badSince=now;
@@ -797,7 +837,7 @@ async function startLegTest(){
 }
 async function finishLegTest(){
   legT.phase="meas"; render();
-  const a=await collectLive(LEGT_MS); legT.end={p:meanOf(a,"p"),r:meanOf(a,"r")}; legT.res=legResult(); legT.phase="done"; render();
+  const a=await collectLive(LEGT_MS); legT.end={p:meanOf(a,"p"),r:meanOf(a,"r")}; legT.res=legResult(); legT.phase="done"; try{const r=legT.res; logAdd("legtest",{leg:legT.leg,turns:legT.turns,dir:T().cw,mp:+r.m.p.toFixed(2),mr:+r.m.r.toFixed(2),ep:+r.e.p.toFixed(2),er:+r.e.r.toFixed(2),v:r.small?"too-small":r.s>0.5?"responds":r.s<-0.5?"opposite":"no-response"})}catch(e){} render();
 }
 function viewLegTest(){
   const p=prof(), t=legT, k=t.leg, e=legExpected(p,k,t.turns), nm=LEGN[k];
@@ -930,6 +970,8 @@ function bindTest(){
 function bind(){
   bindTest();
   document.querySelectorAll(".retrySens").forEach(b=>b.onclick=retrySensors);
+  const lc=$("#logCopy"); if(lc)lc.onclick=async()=>{const o=$("#logOut"),x=logText();try{await navigator.clipboard.writeText(x);lc.textContent="Copied ✔"}catch(e){o.style.display="block";o.value=x;o.select();lc.textContent="Select + copy"}};
+  const lx=$("#logClear"); if(lx)lx.onclick=()=>{if(lx.dataset.sure){LOG=[];logSnap="";save("pl.log",LOG);logSettings();render()}else{lx.dataset.sure=1;lx.textContent="Tap again to clear"}};
   const tb=$("#testBtn"); if(tb)tb.onclick=async()=>{await startSensors();tst=Object.assign({busy:"",known:6.5},LS("pl.test")||{},{busy:""});render()};
   const hs=$("#hintSwap"); if(hs)hs.onclick=()=>{opts.revTurn=!opts.revTurn;persist();worseN=0;worseHint=false;trendHist=[];render()};
   const hn=$("#hintSensor"); if(hn)hn.onclick=async()=>{await startSensors();worseN=0;worseHint=false;tst=Object.assign({busy:"",known:6.5},LS("pl.test")||{},{busy:""});render()};
