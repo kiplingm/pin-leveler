@@ -59,9 +59,10 @@ details.card summary{cursor:pointer}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="2.0.3";
+const VERSION="2.0.4";
 const BUILD_DATE="2026-11-18";
 const CHANGELOG=[
+ ["2.0.4","2026-11-18","Watch display (experimental). Under Sound and phone options on the Level screen, tick Watch display to show a live notification with pitch, roll and the leg instructions; a Pixel Watch mirrors phone notifications, so you can read it at the machine. Needs notification permission and the new sw.js file next to index.html. The watch may lag a second or two, and the phone screen must stay on with the app open. Also fixed: the diagnostic log wrote cw/ccw without the swap applied; it now matches what the screen says."],
  ["2.0.3","2026-11-18","Confirmed on a Star Trek machine: clockwise lowers a leg, so the instructions must say counterclockwise to raise. Swap clockwise / counterclockwise is now switched on once, when updating from an older version (turn it off under Sound and phone options on the Level screen if your levelers work the other way)."],
  ["2.0.2","2026-11-18","Diagnostic log. The app now keeps a history on this phone (up to 400 entries): every settings change, every instruction it gives (which leg, clockwise or counterclockwise, how many turns, with the pitch and roll readings at that moment), how the readings moved afterwards, leg-test results and Level confirmations. Tools → Diagnostic log has Copy log and Clear, so you can paste it when something looks wrong."],
  ["2.0.1","2026-11-17","If pitch reads negative on the Level screen, a warning now names the saved setting that is flipping it (Phone top → FRONT, Reverse pitch sensor, or a bad calibration offset) with a one-tap fix, or offers the two options if the sensor itself reads negative. The status line now shows which flip / reverse / swap settings are on."],
@@ -141,7 +142,7 @@ let P=LS("pl.profiles")||PRESETS.map((p,i)=>({id:p.key?"k_"+p.key:"p"+i,...p}));
 PRESETS.forEach(p=>{ if(p.key && !P.some(x=>x.key===p.key)) P.push({id:"k_"+p.key,...p}); });
 let cur=LS("pl.cur")||P[0].id;
 let off=LS("pl.off")||{p:0,r:0};
-let opts=Object.assign({flip:false,beep:true,speak:false,strict:"normal",trend:true,tick:true,revP:false,revR:false,revTurn:false},LS("pl.opts")||{});
+let opts=Object.assign({flip:false,beep:true,speak:false,strict:"normal",trend:true,tick:true,watch:false,revP:false,revR:false,revTurn:false},LS("pl.opts")||{});
 // revP/revR: reverse a sensor axis. revTurn: swap clockwise/counterclockwise in the instructions (e.g. left-hand threads).
 const sg=k=>opts[k]?-1:1;
 const T=()=>opts.revTurn?{cw:"counterclockwise",ccw:"clockwise"}:{cw:"clockwise",ccw:"counterclockwise"};
@@ -186,6 +187,25 @@ function logCardHtml(){
   <div class="row"><button id="logCopy">Copy log</button><button id="logClear">Clear</button></div>
   <textarea id="logOut" readonly style="width:100%;height:150px;margin-top:8px;font-size:11px;display:none"></textarea>
   ${last?`<pre class="mut" style="font-size:11px;white-space:pre-wrap;margin:8px 0 0">${esc(last)}</pre>`:""}</div>`;
+}
+
+/* ---------- watch display ---------- */
+// A Pixel Watch mirrors phone notifications. Android Chrome only shows notifications from a service worker (sw.js),
+// and a notification with the same tag is replaced in place, so we update one live notification about once a second.
+let swReg=null, watchErr="", watchLast={s:"",t:0};
+async function watchOn(){
+  try{
+    if(!("Notification" in window)||!("serviceWorker" in navigator))throw new Error("This browser can't show notifications.");
+    if(Notification.permission!=="granted"&&await Notification.requestPermission()!=="granted")throw new Error("Notification permission was not granted. Allow notifications for this site in Chrome's site settings.");
+    swReg=await navigator.serviceWorker.register("sw.js"); await navigator.serviceWorker.ready; watchErr=""; return true;
+  }catch(e){ opts.watch=false; persist(); watchErr=String(e.message||e); render(); return false }
+}
+async function watchOff(){ watchLast={s:"",t:0}; try{const r=swReg||await navigator.serviceWorker.getRegistration(); if(r)(await r.getNotifications({tag:"pin-leveler"})).forEach(n=>n.close())}catch(e){} }
+function watchPush(l,g,eP){
+  if(!opts.watch||!swReg||sim||!raw.has)return; const now=Date.now(); if(now-watchLast.t<1000)return;
+  const title=g.ok?"✅ LEVEL":"P "+f2(eP)+"  R "+f2(l.r), body=g.ok?"Hold still":(g.acts.length?g.acts.join("\n"):"–"), s=title+body;
+  if(s===watchLast.s)return; watchLast={s,t:now};
+  try{swReg.showNotification(title,{body,tag:"pin-leveler",renotify:false,silent:true,requireInteraction:true}).catch(()=>{})}catch(e){}
 }
 
 /* ---------- sensors ---------- */
@@ -481,7 +501,7 @@ function viewLevel(p){
   <label style="margin:0"><input type="checkbox" id="oAdjR" ${useR(p)?"checked":""} style="width:auto"> Adjust roll</label></div></div>
   ${tips.length?`<details class="card"><summary><b>Notes for this machine</b></summary><ul class="mut">${tips.map(x=>`<li>${esc(x)}</li>`).join("")}</ul></details>`:""}
   <details class="card" id="optBox" ${optOpen?"open":""}><summary><b>Sound and phone options</b></summary>
-  <div class="row fit" style="margin-top:6px">${chk("oFlip","flip","Phone top → FRONT")}${chk("oBeep","beep","Beep")}${chk("oSpeak","speak","Voice")}${chk("oTrend","trend","Progress tones")}${chk("oTick","tick","Sensor tick")}</div>
+  <div class="row fit" style="margin-top:6px">${chk("oFlip","flip","Phone top → FRONT")}${chk("oBeep","beep","Beep")}${chk("oSpeak","speak","Voice")}${chk("oTrend","trend","Progress tones")}${chk("oTick","tick","Sensor tick")}${chk("oWatch","watch","Watch display (notification)")}</div>${watchErr?`<p class="far" style="font-size:13px;margin:6px 0 0">${esc(watchErr)}</p>`:""}
   <p class="mut" style="font-size:12px;margin-bottom:0">Rising tone = getting closer, falling buzz = getting worse. Tick each second = sensor data is live; a low double beep = it stopped.</p>${fixHtml()}</details>`;
 }
 
@@ -528,7 +548,7 @@ function planGuide(l,p){
     if(L.includes(k))return `<div class="leg lk"><b>🔒 ${LEGN[k]}</b><br><span class="mut">locked, leave alone</span></div>`;
     const d=pl.d[k], g=turnsIn(Math.abs(d),p.tpi);
     if(Math.abs(d)*p.tpi<0.06)return `<div class="leg"><b>${LEGN[k]}</b><br><span class="mut">no change</span></div>`;
-    acts.push(k+" "+(d>0?"cw":"ccw")+" "+g.t.toFixed(2)+(d>0?"↑":"↓"));
+    acts.push(k+" "+((d>0?T().cw:T().ccw)==="clockwise"?"cw":"ccw")+" "+g.t.toFixed(2)+(d>0?"↑":"↓"));
     return `<div class="leg"><b>${LEGN[k]}</b><br><b class="${d>0?"good":"near"}">${d>0?T().cw:T().ccw} ≈ ${g.txt} turn${g.t>1.1?"s":""}</b><br><span class="mut">${d>0?"raises":"lowers"} that corner</span></div>`};
   const notes=[];
   if(L.length)notes.push(`${L.map(k=>LEGN[k]).join(" and ")} leg${L.length>1?"s are":" is"} locked and left alone.`);
@@ -572,7 +592,7 @@ function update(){
   dot.className="d "+(gP&&gR?"good":(fP||fR)?"far":"");
   const ph=$("#pitchHint"); if(ph){const hh=pitchHintHtml(l,p); if(hh!==ph.dataset.h){ph.dataset.h=hh;ph.innerHTML=hh}}
   const g=planGuide(l,p); if(g.t!==lastG){lastG=g.t;$("#guide").innerHTML=g.t}
-  logLevel(l,p,g,eP);
+  logLevel(l,p,g,eP); watchPush(l,g,eP);
   // progress since this screen opened (or since Adjust changed): worst axis, in units of its tolerance
   const m=Math.max(useP(p)?Math.abs(eP)/p.tolP:0,useR(p)?Math.abs(l.r)/p.tolR:0), key=cur+"|"+axesOf(p);
   if(progKey!==key){progKey=key;progStart=Math.max(m,2)}
@@ -1001,7 +1021,7 @@ function bind(){
     const tilt=Math.max(Math.abs(calA.p-calB.p),Math.abs(calA.r-calB.r))/2;
     render(); $("#calStat").textContent+=` · offset saved. Surface tilt ≈ ${tilt.toFixed(2)}°`; };
   const cr=$("#calReset"); if(cr)cr.onclick=()=>{off={p:0,r:0};calA=calB=null;persist();render()};
-  [["oFlip","flip"],["oBeep","beep"],["oSpeak","speak"],["oTrend","trend"],["oTick","tick"],["oRevP","revP"],["oRevR","revR"],["oRev","revTurn"]].forEach(([id,k])=>{const e=$("#"+id);
+  [["oFlip","flip"],["oBeep","beep"],["oSpeak","speak"],["oTrend","trend"],["oTick","tick"],["oWatch","watch"],["oRevP","revP"],["oRevR","revR"],["oRev","revTurn"]].forEach(([id,k])=>{const e=$("#"+id);
     if(e)e.onchange=()=>{opts[k]=e.checked;persist();if(/^rev/.test(k))render();
       // immediate feedback, and the tap also unlocks speech / audio on Android
       try{
@@ -1009,6 +1029,7 @@ function bind(){
         else if(k==="beep"&&e.checked)tone([660,880])
         else if(k==="trend"&&e.checked)tone([523,659,784])
         else if(k==="tick"&&e.checked)tone([1000])
+        else if(k==="watch"){ if(e.checked){watchOn()} else {watchOff()} }
       }catch(err){}
     }});
   const fb=$("#fixBox"); if(fb)fb.ontoggle=()=>{fixOpen=fb.open};
@@ -1045,6 +1066,7 @@ function bindEditor(){
 }
 
 /* ---------- boot ---------- */
+if(opts.watch&&"Notification" in window&&Notification.permission==="granted")watchOn(); else if(opts.watch){opts.watch=false;persist()}
 { // remember the last-seen version; show an "Updated" card when it changed (or when upgrading from a pre-versioning build)
   const prev=LS("pl.ver");
   if(prev&&cmpVer(prev,"2.0.3")<0){opts.revTurn=true;persist()} // user-confirmed: clockwise lowers on Star Trek
