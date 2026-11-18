@@ -59,9 +59,10 @@ details.card summary{cursor:pointer}
 // Every change: bump VERSION + BUILD_DATE and add a new FIRST entry to CHANGELOG.
 // The update checker regex-matches the first VERSION declaration below, so keep that exact form
 // and do not write that declaration anywhere earlier in the file (comments included).
-const VERSION="2.0.2";
+const VERSION="2.0.3";
 const BUILD_DATE="2026-11-18";
 const CHANGELOG=[
+ ["2.0.3","2026-11-18","Confirmed on a Star Trek machine: clockwise lowers a leg, so the instructions must say counterclockwise to raise. Swap clockwise / counterclockwise is now switched on once, when updating from an older version (turn it off under Sound and phone options on the Level screen if your levelers work the other way)."],
  ["2.0.2","2026-11-18","Diagnostic log. The app now keeps a history on this phone (up to 400 entries): every settings change, every instruction it gives (which leg, clockwise or counterclockwise, how many turns, with the pitch and roll readings at that moment), how the readings moved afterwards, leg-test results and Level confirmations. Tools → Diagnostic log has Copy log and Clear, so you can paste it when something looks wrong."],
  ["2.0.1","2026-11-17","If pitch reads negative on the Level screen, a warning now names the saved setting that is flipping it (Phone top → FRONT, Reverse pitch sensor, or a bad calibration offset) with a one-tap fix, or offers the two options if the sensor itself reads negative. The status line now shows which flip / reverse / swap settings are on."],
  ["2.0.0","2026-11-17","Simplified. One live Level screen replaces the Setup / Calibrate / Roll / Pitch / Verify steps: it shows pitch and roll, one combined plan with a turn amount for each of the four legs (locked legs are skipped, and the plan keeps all four feet in one plane), one progress bar and the 3-second confirmation. Tabs: Level, Machine (profile, legs, prep), Tools (spot check, calibrate, sensor test) and About. Pitch only / roll only are now the Adjust pitch / Adjust roll boxes. With no locked legs a correction only raises legs."],
@@ -1046,6 +1047,7 @@ function bindEditor(){
 /* ---------- boot ---------- */
 { // remember the last-seen version; show an "Updated" card when it changed (or when upgrading from a pre-versioning build)
   const prev=LS("pl.ver");
+  if(prev&&cmpVer(prev,"2.0.3")<0){opts.revTurn=true;persist()} // user-confirmed: clockwise lowers on Star Trek
   if(prev!==VERSION){ if(prev||hadSaved){showUpd=true;updFrom=prev||"earlier"} save("pl.ver",VERSION); }
 }
 (function loop(){ try{ update() }catch(e){ const d=$("#dbg"); if(d)d.textContent="Display error (still running): "+(e&&e.message) } requestAnimationFrame(loop) })();
